@@ -25,81 +25,37 @@ def create_tables_if_not_exists():
         create_servers = """
         CREATE TABLE IF NOT EXISTS servers (
             server_no INT AUTO_INCREMENT PRIMARY KEY,
-            company_domain VARCHAR(30) NOT NULL,
-            server_iphost VARCHAR(20) DEFAULT NULL,
+            company_domain VARCHAR(50) NOT NULL,  -- 길이 변경
+            server_iphost VARCHAR(50) DEFAULT NULL,  -- 길이 변경
+            influx_database VARCHAR(100) NOT NULL,
+            influx_retention VARCHAR(50) DEFAULT '3d',
             FOREIGN KEY (company_domain) REFERENCES companies(company_domain),
             INDEX idx_domain_host (company_domain, server_iphost)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """
         db.execute_query(create_servers)
         
-        # system_resources 테이블 생성
-        create_system_resources = """
-        CREATE TABLE IF NOT EXISTS system_resources (
+        # model_metadata 테이블 생성 
+        create_model_metadata = """
+        CREATE TABLE IF NOT EXISTS model_metadata (
             id INT AUTO_INCREMENT PRIMARY KEY,
             company_domain VARCHAR(50) NOT NULL,
             server_no INT NOT NULL,
-            time DATETIME NOT NULL,
-            resource_type VARCHAR(50) NOT NULL,
-            measurement VARCHAR(100) NOT NULL,
-            value DOUBLE NOT NULL,
-            device_id VARCHAR(100) NOT NULL DEFAULT '',
-            batch_id VARCHAR(100),
+            model_path VARCHAR(255) NOT NULL,
+            model_version VARCHAR(50) NOT NULL,
+            training_start DATETIME NOT NULL,
+            training_end DATETIME NOT NULL,
+            metrics JSON,
+            is_active BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (company_domain) REFERENCES companies(company_domain),
             FOREIGN KEY (server_no) REFERENCES servers(server_no),
-            INDEX idx_time_resource (time, resource_type),
-            INDEX idx_device_time (device_id, time),
-            INDEX idx_lookup (company_domain, server_no, resource_type, time)
+            INDEX idx_model_lookup (company_domain, server_no, is_active)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """
-        db.execute_query(create_system_resources)
-        
-        # jvm_metrics 테이블 생성
-        create_jvm_metrics = """
-        CREATE TABLE IF NOT EXISTS jvm_metrics (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            company_domain VARCHAR(50) NOT NULL,
-            server_no INT NOT NULL,
-            time DATETIME NOT NULL,
-            application VARCHAR(100) NOT NULL,
-            metric_type VARCHAR(100) NOT NULL,
-            value DOUBLE NOT NULL,
-            device_id VARCHAR(100) NOT NULL DEFAULT '',
-            batch_id VARCHAR(100),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (company_domain) REFERENCES companies(company_domain),
-            FOREIGN KEY (server_no) REFERENCES servers(server_no),
-            INDEX idx_time_app (time, application),
-            INDEX idx_device_time (device_id, time),
-            INDEX idx_lookup (company_domain, server_no, application, time)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
-        db.execute_query(create_jvm_metrics)
-        
-        # application_impact 테이블 생성
-        create_application_impact = """
-        CREATE TABLE IF NOT EXISTS application_impact (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            company_domain VARCHAR(50) NOT NULL,
-            server_no INT NOT NULL,
-            time DATETIME NOT NULL,
-            application VARCHAR(100) NOT NULL,
-            resource_type VARCHAR(50) NOT NULL,
-            impact_score DOUBLE NOT NULL,
-            calculation_method VARCHAR(50) NOT NULL,
-            device_id VARCHAR(100) DEFAULT '',
-            batch_id VARCHAR(100),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (company_domain) REFERENCES companies(company_domain),
-            FOREIGN KEY (server_no) REFERENCES servers(server_no),
-            INDEX idx_time_app_resource (time, application, resource_type),
-            INDEX idx_device_time (device_id, time)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
-        db.execute_query(create_application_impact)
-        
-        # predictions 테이블 생성
+        db.execute_query(create_model_metadata)
+
+        # predictions 테이블 수정
         create_predictions = """
         CREATE TABLE IF NOT EXISTS predictions (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -109,17 +65,11 @@ def create_tables_if_not_exists():
             target_time DATETIME NOT NULL,
             resource_type VARCHAR(50) NOT NULL,
             predicted_value DOUBLE NOT NULL,
-            actual_value DOUBLE,
-            error DOUBLE,
-            model_version VARCHAR(100) NOT NULL,
-            batch_id VARCHAR(100),
-            device_id VARCHAR(100) DEFAULT '',
+            model_version VARCHAR(50) NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (company_domain) REFERENCES companies(company_domain),
             FOREIGN KEY (server_no) REFERENCES servers(server_no),
-            INDEX idx_prediction (company_domain, server_no, resource_type, target_time),
-            INDEX idx_device_id (device_id),
-            INDEX idx_accuracy (target_time, actual_value)
+            INDEX idx_prediction (company_domain, server_no, target_time)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """
         db.execute_query(create_predictions)
@@ -142,66 +92,6 @@ def create_tables_if_not_exists():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """
         db.execute_query(create_configurations)
-        
-        # 기타 필요한 테이블들
-        other_tables = [
-            """
-            CREATE TABLE IF NOT EXISTS feature_data (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                company_domain VARCHAR(50) NOT NULL,
-                server_no INT NOT NULL,
-                time DATETIME NOT NULL,
-                application VARCHAR(100) NOT NULL,
-                feature_name VARCHAR(100) NOT NULL,
-                value DOUBLE NOT NULL,
-                window_size INT NOT NULL,
-                device_id VARCHAR(100) DEFAULT '',
-                batch_id VARCHAR(100),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_time_app_feature (time, application, feature_name)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS model_performance (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                company_domain VARCHAR(50) NOT NULL,
-                server_no INT NOT NULL,
-                application VARCHAR(100) NOT NULL,
-                resource_type VARCHAR(50) NOT NULL,
-                model_type VARCHAR(50) NOT NULL,
-                mae DOUBLE NOT NULL,
-                rmse DOUBLE NOT NULL,
-                r2_score DOUBLE NOT NULL,
-                feature_importance JSON,
-                trained_at DATETIME NOT NULL,
-                version VARCHAR(50) NOT NULL,
-                device_id VARCHAR(100) DEFAULT '',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_model (company_domain, server_no, application, resource_type)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS alerts (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                company_domain VARCHAR(50) NOT NULL,
-                server_no INT NOT NULL,
-                resource_type VARCHAR(50) NOT NULL,
-                threshold DOUBLE NOT NULL,
-                crossing_time DATETIME NOT NULL,
-                time_to_threshold DOUBLE NOT NULL,
-                current_value DOUBLE NOT NULL,
-                predicted_value DOUBLE NOT NULL,
-                is_notified BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                batch_id VARCHAR(100),
-                device_id VARCHAR(100) DEFAULT '',
-                INDEX idx_alert (company_domain, server_no, resource_type, created_at)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """
-        ]
-        
-        for create_query in other_tables:
-            db.execute_query(create_query)
         
         logger.info("모든 테이블 생성 완료")
         return True
