@@ -232,8 +232,7 @@ class DataCollector:
         
         # 중복 허용을 위해 지정된 시간만큼 이전부터 수집
         start_time = last_time - timedelta(minutes=overlap_minutes)
-        end_time = datetime.utcnow()
-        
+        end_time = datetime.utcnow()        
         logger.info(f"최근 데이터 수집: {start_time} ~ {end_time}")
         
         return self.collect_data_for_range(start_time, end_time)

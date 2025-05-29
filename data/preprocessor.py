@@ -67,7 +67,7 @@ class DataPreprocessor:
     def load_jvm_metrics(self, start_time=None, end_time=None, limit=None):
         """MySQL에서 JVM 메트릭 데이터 로드"""
         if end_time is None:
-            end_time = datetime.now()
+            end_time = datetime.utcnow()
         
         if start_time is None:
             # 기본 로드 기간

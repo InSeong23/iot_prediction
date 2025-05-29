@@ -19,7 +19,7 @@ BUILD_DATE = datetime.now().strftime("%Y-%m-%d")
 DB_SCHEMA = {
     "server_table": "servers",
     "server_id_field": "server_no", 
-    "server_ip_field": "iphost",
+    "server_ip_field": "server_iphost",
     "server_domain_field": "company_domain"
 }
 

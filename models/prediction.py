@@ -208,7 +208,7 @@ class SystemResourcePredictor:
             device_filter = " AND device_id = %s"
             params.append(self.device_id)
         
-        # 과거 예측 조회 (분 단위 정각만 - 시간 동기화 개선)
+        # 과거 예측 조회 
         query = f"""
         SELECT id, resource_type, target_time, predicted_value, device_id
         FROM predictions
@@ -225,7 +225,7 @@ class SystemResourcePredictor:
             logger.info("업데이트할 예측 결과가 없습니다.")
             return True
         
-        logger.info(f"예측 정확도 업데이트: {len(predictions)}개 항목 (분 단위 정각 매칭)")
+        logger.info(f"예측 정확도 업데이트: {len(predictions)}개 항목 ")
         
         # 각 예측에 대한 실제 값 조회 및 업데이트
         updated_count = 0
@@ -244,7 +244,7 @@ class SystemResourcePredictor:
             measurement = "usage_user" if resource_type == "cpu" else "used_percent"
             sys_params.insert(3, measurement)
             
-            # 실제 자원 사용량 조회 (정확한 분 단위 매칭 - 시간 동기화 개선)
+            # 실제 자원 사용량 조회 
             resource_query = f"""
             SELECT value
             FROM system_resources
@@ -285,7 +285,7 @@ class SystemResourcePredictor:
         return True
     
     def save_predictions(self, predictions):
-        """예측 결과 저장 - 분 단위 정각 시간으로 저장  """
+        """예측 결과 저장   """
         # 시간 파싱 (문자열에서 :00 형식 확인)
         times = [datetime.strptime(t, '%Y-%m-%d %H:%M:00') for t in predictions['times']]
         prediction_time = times[0]  # 예측 시점 (첫 번째 시간)
@@ -763,7 +763,8 @@ class SystemResourcePredictor:
     
     def get_latest_jvm_metrics(self, minutes=30):
         """최근 JVM 메트릭 데이터 조회"""
-        end_time = datetime.now()
+        from datetime import timezone
+        end_time = datetime.now(timezone.utc)
         start_time = end_time - timedelta(minutes=minutes)
         
         # 디바이스 필터 추가
