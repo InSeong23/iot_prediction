@@ -87,25 +87,144 @@ class AppImpactModel:
             self.db_manager.close()
     
     def load_training_data(self, start_time=None, end_time=None):
-        """학습 데이터 로드 - JVM 메트릭 → 영향도 점수"""
-        if end_time is None:
-            end_time = datetime.now()
-        
-        if start_time is None:
-            # 훈련 기간 설정
-            value = int(self.training_window[:-1])
-            unit = self.training_window[-1].lower()
+            """학습 데이터 로드 - 스트리밍 아키텍처 우선"""
+            if end_time is None:
+                end_time = datetime.now()
             
-            if unit == 'd':
-                start_time = end_time - timedelta(days=value)
-            elif unit == 'w':
-                start_time = end_time - timedelta(weeks=value)
+            if start_time is None:
+                # 훈련 기간 설정
+                value = int(self.training_window[:-1])
+                unit = self.training_window[-1].lower()
+                
+                if unit == 'd':
+                    start_time = end_time - timedelta(days=value)
+                elif unit == 'w':
+                    start_time = end_time - timedelta(weeks=value)
+                else:
+                    logger.error(f"지원하지 않는 기간 단위: {unit}")
+                    return None, None
+            
+            logger.info(f"학습 데이터 로드: {start_time} ~ {end_time}")
+            
+            # 스트리밍 아키텍처 확인
+            use_streaming = os.getenv('ARCHITECTURE', 'streaming').lower() == 'streaming'
+            
+            if use_streaming:
+                # 스트리밍 데이터 수집 및 전처리
+                return self._load_streaming_training_data(start_time, end_time)
             else:
-                logger.error(f"지원하지 않는 기간 단위: {unit}")
-                return None, None
+                # 기존 MySQL 기반 데이터 로드 (레거시 호환성)
+                return self._load_mysql_training_data(start_time, end_time)
+    
+    def _load_streaming_training_data(self, start_time, end_time):
+        """스트리밍 아키텍처용 학습 데이터 로드"""
+        logger.info("스트리밍 아키텍처에서 학습 데이터 로드")
         
-        logger.info(f"학습 데이터 로드: {start_time} ~ {end_time}")
+        try:
+            from data.streaming_collector import StreamingDataCollector
+            from data.streaming_preprocessor import StreamingPreprocessor
+            
+            # 스트리밍 수집기 초기화
+            collector = StreamingDataCollector(
+                self.config, self.company_domain, self.device_id
+            )
+            
+            # JVM 및 시스템 데이터 수집
+            jvm_df, sys_df = collector.get_training_data(start_time, end_time)
+            
+            if jvm_df.empty:
+                logger.warning(f"애플리케이션 '{self.application}'의 JVM 데이터가 없습니다.")
+                return self._create_dummy_training_data(start_time, end_time)
+            
+            # 해당 애플리케이션 데이터만 필터링
+            app_jvm_df = jvm_df[jvm_df['application'] == self.application]
+            
+            if app_jvm_df.empty:
+                logger.warning(f"애플리케이션 '{self.application}'의 JVM 데이터가 없습니다.")
+                return self._create_dummy_training_data(start_time, end_time)
+            
+            # 전처리기 초기화
+            preprocessor = StreamingPreprocessor(
+                self.config, self.company_domain, self.device_id
+            )
+            
+            # 캐시 키 생성
+            cache_key = f"{start_time.strftime('%Y%m%d')}_{end_time.strftime('%Y%m%d')}"
+            
+            # 영향도 계산 (캐시 확인)
+            impact_df = preprocessor.load_cached_impacts(cache_key)
+            
+            if impact_df is None:
+                # 영향도 계산 필요
+                impact_df = preprocessor.calculate_and_cache_impacts(
+                    jvm_df, sys_df, cache_key
+                )
+            
+            if impact_df is None:
+                logger.warning("영향도 계산 실패")
+                return self._create_dummy_training_data(start_time, end_time)
+            
+            # 해당 애플리케이션 영향도만 필터링
+            app_impact_df = impact_df[impact_df['application'] == self.application]
+            
+            # 특성 생성 (캐시 확인)
+            features_df = preprocessor.load_cached_features(cache_key)
+            
+            if features_df is None:
+                # 특성 생성 필요
+                features_df = preprocessor.generate_and_cache_features(
+                    jvm_df, cache_key
+                )
+            
+            if features_df is None:
+                logger.warning("특성 생성 실패")
+                return self._create_dummy_training_data(start_time, end_time)
+            
+            # 해당 애플리케이션 특성만 필터링
+            app_features_df = features_df[features_df['application'] == self.application]
+            
+            # 학습 데이터 준비
+            return self._prepare_training_data_from_features(app_features_df, app_impact_df)
+            
+        except Exception as e:
+            logger.error(f"스트리밍 학습 데이터 로드 오류: {e}")
+            return self._create_dummy_training_data(start_time, end_time)
+    
+    def _prepare_training_data_from_features(self, features_df, impact_df):
+        """특성 데이터프레임에서 학습 데이터 준비"""
+        if features_df.empty or impact_df.empty:
+            return None, None
         
+        # 특성 피봇
+        features_pivot = features_df.pivot_table(
+            index='time',
+            columns='feature_name',
+            values='value',
+            aggfunc='mean'
+        )
+        
+        # 영향도 피봇
+        impact_pivot = impact_df.pivot_table(
+            index='time',
+            columns='resource_type',
+            values='impact_score',
+            aggfunc='mean'
+        )
+        
+        # 공통 시간대
+        common_times = features_pivot.index.intersection(impact_pivot.index)
+        
+        if len(common_times) < 10:
+            logger.warning("공통 시간대가 부족합니다")
+            return None, None
+        
+        X = features_pivot.loc[common_times].fillna(0)
+        y = impact_pivot.loc[common_times].fillna(0)
+        
+        return X, y
+    
+    def _load_mysql_training_data(self, start_time, end_time):
+        """기존 MySQL 기반 학습 데이터 로드 (레거시 호환성)"""
         # 디바이스 ID 필터 설정
         device_filter = ""
         base_params = [self.company_domain, self.server_id, start_time, end_time]

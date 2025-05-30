@@ -274,14 +274,36 @@ class DatabaseManager:
         return self.get_server_by_device_id(company_domain, server_code)
     
     def get_server_by_device_id(self, company_domain, device_id):
-        """회사 도메인과 device_id로 서버 번호 조회 - 동적 필드명 사용"""
-        query = f"""
-        SELECT {self.server_id_field} FROM {self.server_table} 
-        WHERE {self.server_domain_field} = %s AND {self.server_ip_field} = %s
-        """
-        result = self.fetch_one(query, (company_domain, device_id))
-        return result[0] if result else None
-    
+            """회사 도메인과 device_id로 서버 번호 조회 - 안전한 동적 필드명 사용"""
+            # 실제 테이블 구조 확인
+            try:
+                table_structure = self.fetch_all(f"DESCRIBE {self.server_table}")
+                column_names = [row[0] for row in table_structure] if table_structure else []
+                
+                # 디바이스 ID를 저장하는 컬럼명 결정 (우선순위 순서)
+                device_column = None
+                possible_columns = ['iphost', 'server_iphost', 'device_id', 'server_ip', 'ip_address']
+                
+                for col in possible_columns:
+                    if col in column_names:
+                        device_column = col
+                        break
+                
+                if not device_column:
+                    logger.error(f"servers 테이블에서 디바이스 ID 컬럼을 찾을 수 없습니다. 사용 가능한 컬럼: {column_names}")
+                    return None
+                
+                query = f"""
+                SELECT {self.server_id_field} FROM {self.server_table} 
+                WHERE {self.server_domain_field} = %s AND {device_column} = %s
+                """
+                result = self.fetch_one(query, (company_domain, device_id))
+                return result[0] if result else None
+                
+            except Exception as e:
+                logger.error(f"서버 조회 중 오류: {e}")
+                return None
+        
     def get_system_resources(self, company_domain):
         """시스템 리소스 목록 조회"""
         config_value = self.get_configuration(company_domain, 'system_resources', 'list')

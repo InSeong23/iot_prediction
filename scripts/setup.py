@@ -357,54 +357,83 @@ def insert_company(db_manager, company_domain, company_name=None):
         return False
 
 def insert_server(db_manager, company_domain, device_id, server_name=None, ip_address=None):
-    """서버 정보 삽입 또는 확인 - 동적 필드명 사용"""
+    """서버 정보 삽입 또는 확인 - 안전한 동적 필드명 사용"""
     logger.info(f"서버 정보 설정: {company_domain}, {device_id}")
     
     # DB 스키마 정보 가져오기
     server_table = DB_SCHEMA.get("server_table", "servers")
     server_id_field = DB_SCHEMA.get("server_id_field", "server_no")
-    server_ip_field = DB_SCHEMA.get("server_ip_field", "server_iphost")
     server_domain_field = DB_SCHEMA.get("server_domain_field", "company_domain")
     
-    # 서버가 이미 존재하는지 확인
-    check_query = f"""
-    SELECT {server_id_field} FROM {server_table} 
-    WHERE {server_domain_field} = %s AND {server_ip_field} = %s
-    """
-    exists = db_manager.fetch_one(check_query, (company_domain, device_id))
-    
-    if exists:
-        logger.info(f"서버 '{device_id}'가 이미 존재합니다.")
-        return exists[0]  # 서버 ID 반환
-    
-    # 새 서버 삽입 - AUTO_INCREMENT 필드는 제외
-    insert_query = f"""
-    INSERT INTO {server_table} 
-    ({server_domain_field}, {server_ip_field}) 
-    VALUES (%s, %s)
-    """
-    
-    params = (company_domain, device_id)
-    
-    result = db_manager.execute_query(insert_query, params)
-    if result:
-        logger.info(f"서버 '{device_id}' 데이터 삽입 성공")
+    try:
+        # 실제 테이블 구조 확인
+        table_structure = db_manager.fetch_all(f"DESCRIBE {server_table}")
+        column_names = [row[0] for row in table_structure] if table_structure else []
         
-        # 서버 ID 조회
-        server_id_query = f"""
-        SELECT {server_id_field} FROM {server_table} 
-        WHERE {server_domain_field} = %s AND {server_ip_field} = %s
-        ORDER BY {server_id_field} DESC LIMIT 1
-        """
-        server_id_result = db_manager.fetch_one(server_id_query, (company_domain, device_id))
+        # 디바이스 ID를 저장하는 컬럼명 결정 (우선순위 순서)
+        device_column = None
+        possible_columns = ['iphost', 'server_iphost', 'device_id', 'server_ip', 'ip_address']
         
-        if server_id_result:
-            return server_id_result[0]
-        else:
-            logger.error("서버 ID를 조회할 수 없습니다.")
+        for col in possible_columns:
+            if col in column_names:
+                device_column = col
+                break
+        
+        if not device_column:
+            logger.error(f"servers 테이블에서 디바이스 ID 컬럼을 찾을 수 없습니다. 사용 가능한 컬럼: {column_names}")
             return None
-    else:
-        logger.error(f"서버 '{device_id}' 데이터 삽입 실패")
+        
+        logger.info(f"사용할 디바이스 컬럼: {device_column}")
+        
+        # 서버가 이미 존재하는지 확인
+        check_query = f"""
+        SELECT {server_id_field} FROM {server_table} 
+        WHERE {server_domain_field} = %s AND {device_column} = %s
+        """
+        exists = db_manager.fetch_one(check_query, (company_domain, device_id))
+        
+        if exists:
+            logger.info(f"서버 '{device_id}'가 이미 존재합니다.")
+            return exists[0]  # 서버 ID 반환
+        
+        # 새 서버 삽입
+        insert_columns = [server_domain_field, device_column]
+        insert_values = [company_domain, device_id]
+        
+        # 선택적 컬럼들 추가
+        if 'server_name' in column_names and server_name:
+            insert_columns.append('server_name')
+            insert_values.append(server_name)
+        
+        insert_query = f"""
+        INSERT INTO {server_table} 
+        ({', '.join(insert_columns)}) 
+        VALUES ({', '.join(['%s'] * len(insert_values))})
+        """
+        
+        result = db_manager.execute_query(insert_query, tuple(insert_values))
+        if result:
+            logger.info(f"서버 '{device_id}' 데이터 삽입 성공")
+            
+            # 서버 ID 조회
+            server_id_query = f"""
+            SELECT {server_id_field} FROM {server_table} 
+            WHERE {server_domain_field} = %s AND {device_column} = %s
+            ORDER BY {server_id_field} DESC LIMIT 1
+            """
+            server_id_result = db_manager.fetch_one(server_id_query, (company_domain, device_id))
+            
+            if server_id_result:
+                return server_id_result[0]
+            else:
+                logger.error("서버 ID를 조회할 수 없습니다.")
+                return None
+        else:
+            logger.error(f"서버 '{device_id}' 데이터 삽입 실패")
+            return None
+            
+    except Exception as e:
+        logger.error(f"서버 정보 설정 중 오류: {e}")
         return None
 
 def insert_configurations(db_manager, company_domain, server_id):
