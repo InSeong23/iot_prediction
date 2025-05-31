@@ -87,34 +87,34 @@ class AppImpactModel:
             self.db_manager.close()
     
     def load_training_data(self, start_time=None, end_time=None):
-            """학습 데이터 로드 - 스트리밍 아키텍처 우선"""
-            if end_time is None:
-                end_time = datetime.now()
+        """학습 데이터 로드 - 스트리밍 아키텍처 우선"""
+        if end_time is None:
+            end_time = datetime.now()
+        
+        if start_time is None:
+            # 훈련 기간 설정
+            value = int(self.training_window[:-1])
+            unit = self.training_window[-1].lower()
             
-            if start_time is None:
-                # 훈련 기간 설정
-                value = int(self.training_window[:-1])
-                unit = self.training_window[-1].lower()
-                
-                if unit == 'd':
-                    start_time = end_time - timedelta(days=value)
-                elif unit == 'w':
-                    start_time = end_time - timedelta(weeks=value)
-                else:
-                    logger.error(f"지원하지 않는 기간 단위: {unit}")
-                    return None, None
-            
-            logger.info(f"학습 데이터 로드: {start_time} ~ {end_time}")
-            
-            # 스트리밍 아키텍처 확인
-            use_streaming = os.getenv('ARCHITECTURE', 'streaming').lower() == 'streaming'
-            
-            if use_streaming:
-                # 스트리밍 데이터 수집 및 전처리
-                return self._load_streaming_training_data(start_time, end_time)
+            if unit == 'd':
+                start_time = end_time - timedelta(days=value)
+            elif unit == 'w':
+                start_time = end_time - timedelta(weeks=value)
             else:
-                # 기존 MySQL 기반 데이터 로드 (레거시 호환성)
-                return self._load_mysql_training_data(start_time, end_time)
+                logger.error(f"지원하지 않는 기간 단위: {unit}")
+                return None, None
+        
+        logger.info(f"학습 데이터 로드: {start_time} ~ {end_time}")
+        
+        # 스트리밍 아키텍처 확인
+        use_streaming = os.getenv('ARCHITECTURE', 'streaming').lower() == 'streaming'
+        
+        if use_streaming:
+            # 스트리밍 데이터 수집 및 전처리
+            return self._load_streaming_training_data(start_time, end_time)
+        else:
+            # 기존 MySQL 기반 데이터 로드 (레거시 호환성)
+            return self._load_mysql_training_data(start_time, end_time)
     
     def _load_streaming_training_data(self, start_time, end_time):
         """스트리밍 아키텍처용 학습 데이터 로드"""
@@ -349,7 +349,7 @@ class AppImpactModel:
         logger.info("테스트용 더미 학습 데이터 생성")
         
         # 시간 인덱스 생성 (1시간 간격)
-        times = pd.date_range(start=start_time, end=end_time, freq='1H')
+        times = pd.date_range(start=start_time, end=end_time, freq='h')  # '1H' -> 'h'로 변경
         
         # JVM 메트릭 특성 (설정에서 가져오기)
         from config.settings import JVM_METRICS

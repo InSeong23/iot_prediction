@@ -308,9 +308,9 @@ class StreamingDataPipeline(BasePipeline):
             logger.info("=== 스트리밍 파이프라인 상태 ===")
             logger.info(f"회사: {company_domain}, 디바이스: {device_id}")
             logger.info(f"수집기 캐시: {collector_status.get('file_count', 0)}개 파일, "
-                       f"{collector_status.get('total_size_mb', 0)}MB")
+                    f"{collector_status.get('total_size_mb', 0)}MB")
             logger.info(f"전처리기 캐시: 영향도 {preprocessor_status.get('impacts', {}).get('file_count', 0)}개, "
-                       f"특성 {preprocessor_status.get('features', {}).get('file_count', 0)}개")
+                    f"특성 {preprocessor_status.get('features', {}).get('file_count', 0)}개")
             logger.info(f"최근 24시간 작업: {len(recent_jobs)}개")
             
             # 최근 작업 요약
@@ -319,7 +319,8 @@ class StreamingDataPipeline(BasePipeline):
                 logger.info(f"  성공: {successful_jobs}/{len(recent_jobs)}")
                 
                 for job in recent_jobs[-5:]:  # 최근 5개 작업
-                    status = "✅" if job['job_status'] == 'completed' else "❌"
+                    # 이모티콘 대신 텍스트 사용
+                    status = "[SUCCESS]" if job['job_status'] == 'completed' else "[FAILED]"
                     logger.info(f"  {status} {job['job_type']}: {job['start_time']}")
             
             return True
