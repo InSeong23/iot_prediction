@@ -88,6 +88,10 @@ DEFAULT_CONFIG = {
     'training_window': '3d',
     'validation_split': 0.2,
     
+    # 예측 간격 설정
+    'prediction_interval_minutes': int(os.getenv('PREDICTION_INTERVAL_MINUTES', '5')),  # 기본 5분
+    'adaptive_interval': os.getenv('ADAPTIVE_INTERVAL', 'true').lower() == 'true',
+    
     # 임계값
     'cpu_threshold': 80.0,
     'memory_threshold': 80.0,
@@ -293,6 +297,23 @@ LOGGING = {
     "file": DEFAULT_CONFIG['log_file'],
     "max_bytes": DEFAULT_CONFIG['log_max_bytes'],
     "backup_count": DEFAULT_CONFIG['log_backup_count']
+}
+PREDICTION_CONFIG = {
+    # 예측 간격 설정 (분 단위)
+    'prediction_interval_minutes': int(os.getenv('PREDICTION_INTERVAL_MINUTES', '5')),  # 기본 5분
+    
+    # 다른 간격 옵션들
+    'short_term_interval': 5,    # 단기 예측: 5분
+    'medium_term_interval': 15,  # 중기 예측: 15분
+    'long_term_interval': 60,    # 장기 예측: 1시간
+    
+    # 예측 범위별 간격 매핑
+    'interval_by_horizon': {
+        1: 5,    # 1시간 예측 → 5분 간격
+        6: 15,   # 6시간 예측 → 15분 간격
+        24: 30,  # 24시간 예측 → 30분 간격
+        168: 60  # 7일 예측 → 1시간 간격
+    }
 }
 
 # 기존 호환성 변수들

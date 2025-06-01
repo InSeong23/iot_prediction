@@ -184,7 +184,36 @@ class ConfigManager:
             'memory': self.get('memory_threshold'),
             'disk': self.get('disk_threshold')
         }
-    
+    def get_prediction_interval(self, hours: int = None) -> int:
+        """예측 간격 조회 (분 단위)"""
+        # 적응적 간격 설정이 활성화된 경우
+        if self.get('adaptive_interval', True) and hours:
+            from config.settings import PREDICTION_CONFIG
+            interval_map = PREDICTION_CONFIG.get('interval_by_horizon', {})
+            
+            # 가장 가까운 범위의 간격 찾기
+            for horizon, interval in sorted(interval_map.items()):
+                if hours <= horizon:
+                    logger.info(f"예측 범위 {hours}시간에 대해 {interval}분 간격 적용")
+                    return interval
+            
+            # 매핑되지 않은 경우 가장 큰 간격 사용
+            max_interval = max(interval_map.values()) if interval_map else 60
+            logger.info(f"예측 범위 {hours}시간에 대해 최대 간격 {max_interval}분 적용")
+            return max_interval
+        
+        # 기본 설정값 사용
+        return self.get('prediction_interval_minutes', 5)
+
+    def get_prediction_config(self) -> dict:
+        """예측 설정 딕셔너리 반환"""
+        return {
+            'prediction_horizon': self.get('prediction_horizon'),
+            'training_window': self.get('training_window'),
+            'model_type': self.get('model_type'),
+            'prediction_interval_minutes': self.get('prediction_interval_minutes', 5),
+            'adaptive_interval': self.get('adaptive_interval', True)
+        }  
     def validate_config(self) -> bool:
         """설정 유효성 검사"""
         required_keys = [

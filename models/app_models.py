@@ -538,17 +538,25 @@ class AppImpactModel:
                 # 3. 특성 이름 정렬 (모델 학습 시와 동일한 순서)
                 if hasattr(self.models[resource_type], 'feature_names_in_'):
                     expected_features = self.models[resource_type].feature_names_in_
-                    aligned_features = self._align_jvm_features(cleaned_features, expected_features)
+                    aligned_features = self._align_features_comprehensive(cleaned_features, expected_features)
                 else:
-                    # scikit-learn 이전 버전 호환성
-                    aligned_features = cleaned_features
+                    # scikit-learn 이전 버전 호환성 - 스케일러에서 특성 이름 확인
+                    if hasattr(self.scalers[resource_type], 'feature_names_in_'):
+                        expected_features = self.scalers[resource_type].feature_names_in_
+                        aligned_features = self._align_features_comprehensive(cleaned_features, expected_features)
+                    else:
+                        # 특성 이름 정보가 없는 경우 경고하고 기본값 사용
+                        logger.warning(f"'{resource_type}' 모델의 특성 정보를 찾을 수 없습니다. 기본값 사용")
+                        aligned_features = cleaned_features
                 
                 # 4. 특성 스케일링
                 try:
                     features_scaled = self.scalers[resource_type].transform(aligned_features)
                 except Exception as scale_error:
                     logger.warning(f"특성 스케일링 오류 ({resource_type}): {scale_error}")
-                    features_scaled = aligned_features.values
+                    # 스케일링 실패 시 정규화된 값 사용
+                    aligned_features_normalized = (aligned_features - aligned_features.mean()) / (aligned_features.std() + 1e-8)
+                    features_scaled = aligned_features_normalized.values
                 
                 # 5. 영향도 예측 수행
                 predictions[resource_type] = self.models[resource_type].predict(features_scaled)
@@ -559,7 +567,90 @@ class AppImpactModel:
                 predictions[resource_type] = np.array([0.5] * len(features))
         
         return predictions
-    
+    def _align_features_comprehensive(self, input_features, expected_features):
+        """포괄적인 JVM 메트릭 특성 정렬"""
+        
+        # 새 데이터프레임 생성 
+        aligned_df = pd.DataFrame(index=input_features.index)
+        
+        logger.debug(f"입력 특성: {list(input_features.columns)}")
+        logger.debug(f"기대 특성: {list(expected_features)}")
+        
+        for feature_name in expected_features:
+            if feature_name in input_features.columns:
+                # 직접 매칭되는 특성 복사
+                aligned_df[feature_name] = input_features[feature_name]
+            elif feature_name in ['hour', 'day_of_week', 'is_weekend']:
+                # 시간 특성 처리
+                if feature_name == 'hour':
+                    aligned_df[feature_name] = datetime.now().hour
+                elif feature_name == 'day_of_week':
+                    aligned_df[feature_name] = datetime.now().weekday()
+                elif feature_name == 'is_weekend':
+                    aligned_df[feature_name] = 1 if datetime.now().weekday() >= 5 else 0
+            elif '_' in feature_name:
+                # 윈도우 특성 처리 (예: cpu_utilization_percent_mean_15min)
+                base_feature = self._extract_base_feature(feature_name)
+                if base_feature in input_features.columns:
+                    # 기본 메트릭 값으로 윈도우 특성 근사
+                    aligned_df[feature_name] = input_features[base_feature]
+                    logger.debug(f"특성 '{feature_name}' 기본 메트릭 '{base_feature}'로 근사")
+                else:
+                    # 유사한 특성으로 대체
+                    similar_feature = self._find_similar_feature(feature_name, input_features.columns)
+                    if similar_feature:
+                        aligned_df[feature_name] = input_features[similar_feature]
+                        logger.debug(f"특성 '{feature_name}' 유사 특성 '{similar_feature}'로 대체")
+                    else:
+                        # 기본값 설정
+                        aligned_df[feature_name] = self._get_default_value(feature_name)
+                        logger.debug(f"특성 '{feature_name}' 기본값 설정")
+            else:
+                # 매칭되지 않는 특성은 기본값으로 채우기
+                aligned_df[feature_name] = self._get_default_value(feature_name)
+                logger.debug(f"특성 '{feature_name}' 기본값(추정) 설정")
+        
+        # 결측치 채우기
+        aligned_df = aligned_df.fillna(0.0)
+        
+        logger.debug(f"특성 정렬 완료: {aligned_df.shape}, 컬럼: {len(aligned_df.columns)}개")
+        
+        return aligned_df    
+    def _find_similar_feature(self, target_feature, available_features):
+        """유사한 특성 찾기"""
+        base_name = self._extract_base_feature(target_feature)
+        
+        # 정확한 매칭 시도
+        if base_name in available_features:
+            return base_name
+        
+        # 부분 매칭 시도
+        for feature in available_features:
+            if base_name in feature or feature in base_name:
+                return feature
+        
+        return None
+
+    def _get_default_value(self, feature_name):
+        """특성별 기본값 반환"""
+        if 'cpu' in feature_name.lower():
+            return 30.0  # CPU 사용률 기본값
+        elif 'memory' in feature_name.lower() or 'heap' in feature_name.lower():
+            return 1000000000.0  # 메모리 바이트 기본값
+        elif 'gc' in feature_name.lower():
+            return 1000.0  # GC 횟수 기본값
+        elif 'thread' in feature_name.lower():
+            return 50.0  # 스레드 수 기본값
+        elif 'process' in feature_name.lower():
+            return 400.0  # 프로세스 관련 기본값
+        elif 'hour' in feature_name:
+            return datetime.now().hour
+        elif 'day_of_week' in feature_name:
+            return datetime.now().weekday()
+        elif 'is_weekend' in feature_name:
+            return 1 if datetime.now().weekday() >= 5 else 0
+        else:
+            return 0.0  # 기본값    
     def _align_jvm_features(self, input_features, expected_features):
         """JVM 메트릭 특성 정렬"""
         
@@ -591,7 +682,21 @@ class AppImpactModel:
         logger.debug(f"JVM 특성 정렬 완료: {aligned_df.shape}, 컬럼: {aligned_df.columns.tolist()}")
         
         return aligned_df
-
+    def _extract_base_feature(self, window_feature_name):
+        """윈도우 특성에서 기본 메트릭 이름 추출"""
+        # 예: cpu_utilization_percent_mean_15min -> cpu_utilization_percent
+        parts = window_feature_name.split('_')
+        
+        # 통계 관련 키워드 제거
+        stats_keywords = ['mean', 'std', 'max', 'min']
+        time_keywords = ['5min', '15min', '30min', '60min']
+        
+        base_parts = []
+        for part in parts:
+            if part not in stats_keywords and part not in time_keywords:
+                base_parts.append(part)
+        
+        return '_'.join(base_parts)
     def save_model_metrics(self, metrics):
         """모델 성능 메트릭 저장"""
         for resource_type, resource_metrics in metrics.items():

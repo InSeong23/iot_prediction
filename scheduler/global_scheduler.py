@@ -74,13 +74,24 @@ class StreamingCompanyProcessor:
                     if device_id and device_id not in devices:
                         devices.append(device_id)
             
-            # 제외 디바이스 필터링
+            # 제외 디바이스 목록 조회
             excluded_devices = self.db_manager.get_excluded_devices(self.company_domain)
-            self.devices = [d for d in devices if d not in excluded_devices]
+            logger.info(f"회사 '{self.company_domain}' 제외 디바이스 목록: {excluded_devices}")
+            
+            # 제외 디바이스 필터링
+            filtered_devices = []
+            for device in devices:
+                if device not in excluded_devices:
+                    filtered_devices.append(device)
+                    logger.info(f"디바이스 '{device}' 포함됨")
+                else:
+                    logger.info(f"디바이스 '{device}' 제외됨 (excluded_devices 설정)")
+            
+            self.devices = filtered_devices
             
             client.close()
             
-            logger.info(f"회사 '{self.company_domain}' 활성 디바이스: {self.devices}")
+            logger.info(f"회사 '{self.company_domain}' 최종 활성 디바이스: {self.devices}")
             
         except Exception as e:
             logger.error(f"회사 '{self.company_domain}' 디바이스 감지 오류: {e}")
@@ -94,28 +105,39 @@ class StreamingCompanyProcessor:
             logger.warning(f"회사 '{self.company_domain}'에 활성 디바이스가 없습니다")
             return False
         
+        logger.info(f"회사 '{self.company_domain}' 처리 대상 디바이스: {self.devices}")
+        
         success_count = 0
         
         # 각 디바이스별 스트리밍 처리
         for device_id in self.devices:
+            logger.info(f"디바이스 '{device_id}' 개별 처리 시작")
             try:
                 if self._process_device_streaming(device_id):
                     success_count += 1
+                    logger.info(f"디바이스 '{device_id}' 스트리밍 처리 성공")
                 else:
                     logger.warning(f"디바이스 '{device_id}' 스트리밍 처리 실패")
             except Exception as e:
                 logger.error(f"디바이스 '{device_id}' 처리 중 오류: {e}")
         
+        logger.info(f"개별 디바이스 처리 완료: {success_count}/{len(self.devices)} 성공")
+        
         # 회사 전체 모델 학습 (충분한 데이터가 있을 때)
         if success_count > 0:
+            logger.info(f"회사 '{self.company_domain}' 통합 모델 학습 시작 (성공한 디바이스: {success_count}개)")
             self._train_company_models_streaming()
             self._predict_company_resources_streaming()
+        else:
+            logger.warning(f"회사 '{self.company_domain}' 성공한 디바이스가 없어 모델 학습 건너뜀")
         
         logger.info(f"회사 '{self.company_domain}' 스트리밍 처리 완료: {success_count}/{len(self.devices)} 성공")
         return success_count > 0
     
     def _process_device_streaming(self, device_id: str) -> bool:
         """개별 디바이스 스트리밍 처리"""
+        # 로그 컨텍스트를 먼저 설정
+        set_context(company_domain=self.company_domain, device_id=device_id)
         logger.info(f"디바이스 '{device_id}' 스트리밍 처리 시작")
         
         try:
@@ -125,9 +147,6 @@ class StreamingCompanyProcessor:
                 server_id = self._register_device(device_id)
                 if not server_id:
                     return False
-            
-            # 로그 컨텍스트 업데이트
-            set_context(company_domain=self.company_domain, device_id=device_id)
             
             # 스트리밍 파이프라인 실행
             streaming_pipeline = StreamingDataPipeline(self._create_device_config(device_id, server_id))
@@ -175,22 +194,55 @@ class StreamingCompanyProcessor:
         logger.info(f"회사 '{self.company_domain}' 스트리밍 모델 학습 시작")
         
         try:
-            # 첫 번째 디바이스로 대표 학습 (캐시된 데이터 활용)
-            if self.devices:
-                device_id = self.devices[0]
-                server_id = self.db_manager.get_server_by_device_id(self.company_domain, device_id)
+            # 성공적으로 처리된 디바이스들로 모델 학습
+            successful_devices = []
+            
+            for device_id in self.devices:
+                # 해당 디바이스의 캐시 데이터 확인
+                cache_dir = os.path.join("cache", self.company_domain, device_id)
+                if os.path.exists(cache_dir):
+                    cache_files = [f for f in os.listdir(cache_dir) if f.endswith('.pkl')]
+                    if cache_files:
+                        successful_devices.append(device_id)
+                        logger.info(f"디바이스 '{device_id}' 캐시 데이터 확인됨")
+                    else:
+                        logger.warning(f"디바이스 '{device_id}' 캐시 데이터 없음")
+                else:
+                    logger.warning(f"디바이스 '{device_id}' 캐시 디렉토리 없음")
+            
+            if not successful_devices:
+                logger.warning(f"회사 '{self.company_domain}' 학습 가능한 디바이스 없음")
+                return
+            
+            # 첫 번째 성공한 디바이스로 대표 학습
+            target_device = successful_devices[0]
+            logger.info(f"회사 '{self.company_domain}' 모델 학습 대상 디바이스: '{target_device}'")
+            
+            # 로그 컨텍스트를 학습 대상 디바이스로 설정
+            set_context(company_domain=self.company_domain, device_id=target_device)
+            
+            server_id = self.db_manager.get_server_by_device_id(self.company_domain, target_device)
+            
+            if server_id:
+                config = self._create_device_config(target_device, server_id)
                 
-                if server_id:
-                    config = self._create_device_config(device_id, server_id)
-                    
-                    # 모델 학습 파이프라인 (기존 방식 유지)
-                    model_pipeline = ModelPipeline(config)
-                    model_pipeline.execute(mode='all')
-                    
-                    logger.info(f"회사 '{self.company_domain}' 스트리밍 모델 학습 완료")
-                    
+                # 모델 학습 파이프라인 (기존 방식 유지)
+                from pipelines.model_pipeline import ModelPipeline
+                model_pipeline = ModelPipeline(config)
+                
+                success = model_pipeline.execute(mode='all')
+                
+                if success:
+                    logger.info(f"회사 '{self.company_domain}' 스트리밍 모델 학습 완료 (디바이스: {target_device})")
+                else:
+                    logger.error(f"회사 '{self.company_domain}' 스트리밍 모델 학습 실패")
+            else:
+                logger.error(f"디바이스 '{target_device}' 서버 ID 조회 실패")
+                
         except Exception as e:
             logger.error(f"회사 '{self.company_domain}' 스트리밍 모델 학습 오류: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     def _predict_company_resources_streaming(self):
         """스트리밍 방식으로 회사 리소스 예측"""
@@ -203,10 +255,11 @@ class StreamingCompanyProcessor:
                 if server_id:
                     config = self._create_device_config(device_id, server_id)
                     
+                    from pipelines.prediction_pipeline import PredictionPipeline
                     prediction_pipeline = PredictionPipeline(config)
                     prediction_pipeline.execute(mode='predict')
             
-            logger.info(f"회사 '{self.company_domain}' 스트리밸 예측 완료")
+            logger.info(f"회사 '{self.company_domain}' 스트리밍 예측 완료")
             
         except Exception as e:
             logger.error(f"회사 '{self.company_domain}' 스트리밍 예측 오류: {e}")

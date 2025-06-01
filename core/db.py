@@ -312,7 +312,16 @@ class DatabaseManager:
     def get_excluded_devices(self, company_domain):
         """제외할 디바이스 목록 조회"""
         config_value = self.get_configuration(company_domain, 'excluded_devices', 'list')
-        return config_value.split(',') if config_value else []
+        
+        if config_value:
+            excluded_list = [device.strip() for device in config_value.split(',') if device.strip()]
+            logger.info(f"DB에서 조회된 제외 디바이스 목록 (회사: {company_domain}): {excluded_list}")
+            return excluded_list
+        else:
+            # 기본 제외 디바이스 목록 (settings.py에서)
+            from config.settings import DEFAULT_EXCLUDED_DEVICES
+            logger.info(f"기본 제외 디바이스 목록 사용 (회사: {company_domain}): {DEFAULT_EXCLUDED_DEVICES}")
+            return DEFAULT_EXCLUDED_DEVICES
 
     def get_excluded_locations(self, company_domain):
         """제외할 location 목록 조회"""

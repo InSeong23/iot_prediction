@@ -52,7 +52,26 @@ class PredictionPipeline(BasePipeline):
         logger.info("시스템 리소스 예측 실행 시작")
         
         try:
-            from models.prediction import SystemResourcePredictor
+            # 현재 models 폴더에 있는 파일들 확인
+            models_dir = os.path.join(os.path.dirname(__file__), "..", "models")
+            available_files = []
+            if os.path.exists(models_dir):
+                available_files = [f for f in os.listdir(models_dir) if f.endswith('.py')]
+            
+            logger.info(f"models 폴더 사용 가능 파일: {available_files}")
+            
+            # prediction.py 파일이 없으면 경고 후 건너뛰기
+            if 'prediction.py' not in available_files:
+                logger.warning("prediction.py 파일이 없어 예측을 건너뜁니다")
+                logger.info("사용 가능한 모델 파일: streaming_models.py 사용 권장")
+                return True
+            
+            # prediction.py가 있는 경우에만 import 시도
+            try:
+                from models.prediction import SystemResourcePredictor
+            except ImportError as e:
+                logger.error(f"SystemResourcePredictor import 실패: {e}")
+                return False
             
             # ConfigManager에서 설정 가져오기
             company_domain = self.config.get('company_domain')

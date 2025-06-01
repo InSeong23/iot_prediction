@@ -109,10 +109,13 @@ class StreamingDataCollector:
         """InfluxDB에서 JVM 메트릭 조회"""
         device_filter = f' and r["deviceId"] == "{self.device_id}"' if self.device_id else ""
         
+        # ISO 형식으로 시간 변환 (Z 접미사 추가)
+        start_str = start_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        end_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        
         query = f'''
         from(bucket: "{self.influxdb_bucket}")
-        |> range(start: {start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}, 
-                 stop: {end_time.strftime('%Y-%m-%dT%H:%M:%SZ')})
+        |> range(start: {start_str}, stop: {end_str})
         |> filter(fn: (r) => r["origin"] == "server_data")
         |> filter(fn: (r) => r["companyDomain"] == "{self.company_domain}"{device_filter})
         |> filter(fn: (r) => r["location"] == "service_resource_data")
@@ -120,6 +123,7 @@ class StreamingDataCollector:
         '''
         
         try:
+            logger.debug(f"JVM 메트릭 쿼리 실행: {start_str} ~ {end_str}")
             results = self.query_api.query(query)
             data = []
             
@@ -137,6 +141,8 @@ class StreamingDataCollector:
             if not df.empty:
                 df['time'] = pd.to_datetime(df['time'])
                 logger.info(f"JVM 메트릭 조회 완료: {len(df)}개")
+            else:
+                logger.warning(f"JVM 메트릭 조회 결과 없음 (시간 범위: {start_str} ~ {end_str})")
             
             return df
             
@@ -148,12 +154,15 @@ class StreamingDataCollector:
         """InfluxDB에서 시스템 리소스 조회"""
         device_filter = f' and r["deviceId"] == "{self.device_id}"' if self.device_id else ""
         
+        # ISO 형식으로 시간 변환
+        start_str = start_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        end_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        
         # CPU, 메모리, 디스크 리소스 조회
         queries = {
             'cpu': f'''
             from(bucket: "{self.influxdb_bucket}")
-            |> range(start: {start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}, 
-                     stop: {end_time.strftime('%Y-%m-%dT%H:%M:%SZ')})
+            |> range(start: {start_str}, stop: {end_str})
             |> filter(fn: (r) => r["origin"] == "server_data")
             |> filter(fn: (r) => r["companyDomain"] == "{self.company_domain}"{device_filter})
             |> filter(fn: (r) => r["location"] == "server_resource_data")
@@ -165,8 +174,7 @@ class StreamingDataCollector:
             
             'mem': f'''
             from(bucket: "{self.influxdb_bucket}")
-            |> range(start: {start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}, 
-                     stop: {end_time.strftime('%Y-%m-%dT%H:%M:%SZ')})
+            |> range(start: {start_str}, stop: {end_str})
             |> filter(fn: (r) => r["origin"] == "server_data")
             |> filter(fn: (r) => r["companyDomain"] == "{self.company_domain}"{device_filter})
             |> filter(fn: (r) => r["location"] == "server_resource_data")
@@ -177,8 +185,7 @@ class StreamingDataCollector:
             
             'disk': f'''
             from(bucket: "{self.influxdb_bucket}")
-            |> range(start: {start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}, 
-                     stop: {end_time.strftime('%Y-%m-%dT%H:%M:%SZ')})
+            |> range(start: {start_str}, stop: {end_str})
             |> filter(fn: (r) => r["origin"] == "server_data")
             |> filter(fn: (r) => r["companyDomain"] == "{self.company_domain}"{device_filter})
             |> filter(fn: (r) => r["location"] == "server_resource_data")
@@ -192,6 +199,7 @@ class StreamingDataCollector:
         
         try:
             for resource_type, query in queries.items():
+                logger.debug(f"{resource_type} 리소스 쿼리 실행")
                 results = self.query_api.query(query)
                 
                 for table in results:
@@ -209,6 +217,8 @@ class StreamingDataCollector:
             if not df.empty:
                 df['time'] = pd.to_datetime(df['time'])
                 logger.info(f"시스템 리소스 조회 완료: {len(df)}개")
+            else:
+                logger.warning(f"시스템 리소스 조회 결과 없음 (시간 범위: {start_str} ~ {end_str})")
             
             return df
             
@@ -218,12 +228,34 @@ class StreamingDataCollector:
     
     def get_latest_data(self, minutes=30) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """최근 데이터 조회 - 예측용"""
-        end_time = datetime.now()
+        end_time = datetime.utcnow()  # UTC 시간 사용
         start_time = end_time - timedelta(minutes=minutes)
+        
+        logger.info(f"최근 데이터 조회: {start_time} ~ {end_time} ({minutes}분)")
         
         # 최근 데이터는 캐시하지 않고 직접 조회
         jvm_df = self._query_jvm_metrics(start_time, end_time)
         sys_df = self._query_system_resources(start_time, end_time)
+        
+        # 데이터가 부족한 경우 기간 확장
+        if jvm_df.empty or len(jvm_df) < 10:
+            logger.warning(f"최근 {minutes}분 JVM 데이터 부족 ({len(jvm_df)}개), 기간 확장")
+            
+            # 최대 6시간까지 확장
+            for extended_minutes in [60, 120, 360]:
+                extended_start = end_time - timedelta(minutes=extended_minutes)
+                jvm_df = self._query_jvm_metrics(extended_start, end_time)
+                
+                if not jvm_df.empty and len(jvm_df) >= 10:
+                    logger.info(f"확장된 기간({extended_minutes}분)에서 JVM 데이터 발견: {len(jvm_df)}개")
+                    # 시스템 데이터도 같은 기간으로 조회
+                    sys_df = self._query_system_resources(extended_start, end_time)
+                    break
+            
+            if jvm_df.empty:
+                logger.error("확장된 기간에서도 JVM 데이터를 찾을 수 없습니다")
+        
+        logger.info(f"최근 데이터 조회 결과: JVM {len(jvm_df)}개, 시스템 {len(sys_df)}개")
         
         return jvm_df, sys_df
     
