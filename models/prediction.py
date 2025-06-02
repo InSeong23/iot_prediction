@@ -312,90 +312,97 @@ class SystemResourcePredictor:
     
     def save_predictions(self, predictions):
         """예측 결과 저장 - 간격 설정 지원"""
-        # 예측 간격 확인
-        interval_minutes = predictions.get('prediction_interval_minutes', 5)
-        
-        # 시간 파싱 (간격에 따른 포맷 결정)
-        time_format = '%Y-%m-%d %H:%M:00' if interval_minutes < 60 else '%Y-%m-%d %H:00:00'
-        times = [datetime.strptime(t, time_format) for t in predictions['times']]
-        
-        prediction_time = times[0]  # 예측 시점 (첫 번째 시간)
-        
-        batch_id = datetime.now().strftime("%Y%m%d%H%M%S")
-        device_id = predictions.get('device_id', '')
-        
-        logger.info(f"예측 결과 저장: {len(times)}개 포인트, {interval_minutes}분 간격")
-        
-        # 자원별 예측 결과
-        for resource_type, values in predictions['predictions'].items():
-            # 배치 데이터
-            batch_data = []
+        try:
+            # 예측 간격 확인
+            interval_minutes = predictions.get('prediction_interval_minutes', 5)
             
-            for i, (target_time, value) in enumerate(zip(times, values)):
-                batch_data.append((
-                    self.company_domain,
-                    self.server_id,
-                    prediction_time,
-                    target_time,
-                    resource_type,
-                    value,
-                    None,  # actual_value (나중에 업데이트)
-                    None,  # error (나중에 계산)
-                    self.model_type,
-                    batch_id,
-                    device_id
-                ))
+            # 시간 파싱 (간격에 따른 포맷 결정)
+            time_format = '%Y-%m-%d %H:%M:00' if interval_minutes < 60 else '%Y-%m-%d %H:00:00'
+            times = [datetime.strptime(t, time_format) for t in predictions['times']]
             
-            # DB에 저장
-            query = f"""
-            INSERT INTO predictions
-            (company_domain, {self.db_manager.server_id_field}, prediction_time, target_time, resource_type, 
-            predicted_value, actual_value, error, model_version, batch_id, device_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """
+            prediction_time = datetime.now()  # 현재 시간을 예측 시점으로 사용
             
-            result = self.db_manager.execute_query(query, batch_data, many=True)
+            batch_id = datetime.now().strftime("%Y%m%d%H%M%S")
+            device_id = predictions.get('device_id', '')
             
-            if result:
-                logger.info(f"'{resource_type}' 예측 결과 {len(batch_data)}개 저장 완료 ({interval_minutes}분 간격)")
-            else:
-                logger.error(f"'{resource_type}' 예측 결과 저장 실패")
-        
-        # 알림 정보 저장
-        if predictions['alerts']:
-            for resource_type, alert in predictions['alerts'].items():
+            logger.info(f"예측 결과 저장: {len(times)}개 포인트, {interval_minutes}분 간격")
+            
+            # 자원별 예측 결과
+            for resource_type, values in predictions['predictions'].items():
+                # 배치 데이터
+                batch_data = []
+                
+                for i, (target_time, value) in enumerate(zip(times, values)):
+                    batch_data.append((
+                        self.company_domain,
+                        self.server_id,
+                        prediction_time,
+                        target_time,
+                        resource_type,
+                        float(value),  # 명시적 형변환
+                        None,  # actual_value (나중에 업데이트)
+                        None,  # error (나중에 계산)
+                        self.model_type,
+                        batch_id,
+                        device_id
+                    ))
+                
+                # DB에 저장
                 query = f"""
-                INSERT INTO alerts
-                (company_domain, {self.db_manager.server_id_field}, resource_type, threshold, crossing_time, 
-                time_to_threshold, current_value, predicted_value, created_at, batch_id, device_id)
+                INSERT INTO predictions
+                (company_domain, {self.db_manager.server_id_field}, prediction_time, target_time, resource_type, 
+                predicted_value, actual_value, error, model_version, batch_id, device_id)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 
-                crossing_time = datetime.strptime(alert['crossing_time'], time_format)
-                device_id = alert.get('device_id', '')
-                
-                params = (
-                    self.company_domain,
-                    self.server_id,
-                    resource_type,
-                    alert['threshold'],
-                    crossing_time,
-                    alert['time_to_threshold'],
-                    alert['current_value'],
-                    alert['predicted_value'],
-                    datetime.now(),
-                    batch_id,
-                    device_id
-                )
-                
-                result = self.db_manager.execute_query(query, params)
+                result = self.db_manager.execute_query(query, batch_data, many=True)
                 
                 if result:
-                    logger.info(f"'{resource_type}' 알림 정보 저장 완료")
+                    logger.info(f"'{resource_type}' 예측 결과 {len(batch_data)}개 저장 완료 ({interval_minutes}분 간격)")
                 else:
-                    logger.error(f"'{resource_type}' 알림 정보 저장 실패")
-        
-        return True
+                    logger.error(f"'{resource_type}' 예측 결과 저장 실패")
+            
+            # 알림 정보 저장
+            if predictions.get('alerts'):
+                for resource_type, alert in predictions['alerts'].items():
+                    query = f"""
+                    INSERT INTO alerts
+                    (company_domain, {self.db_manager.server_id_field}, resource_type, threshold, crossing_time, 
+                    time_to_threshold, current_value, predicted_value, created_at, batch_id, device_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """
+                    
+                    crossing_time = datetime.strptime(alert['crossing_time'], time_format)
+                    device_id = alert.get('device_id', '')
+                    
+                    params = (
+                        self.company_domain,
+                        self.server_id,
+                        resource_type,
+                        float(alert['threshold']),
+                        crossing_time,
+                        float(alert['time_to_threshold']),
+                        float(alert['current_value']),
+                        float(alert['predicted_value']),
+                        datetime.now(),
+                        batch_id,
+                        device_id
+                    )
+                    
+                    result = self.db_manager.execute_query(query, params)
+                    
+                    if result:
+                        logger.info(f"'{resource_type}' 알림 정보 저장 완료")
+                    else:
+                        logger.error(f"'{resource_type}' 알림 정보 저장 실패")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"예측 결과 저장 중 오류: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
     
     def load_training_data(self, start_time=None, end_time=None):
         """학습 데이터 로드 - 스트리밍 아키텍처 우선"""

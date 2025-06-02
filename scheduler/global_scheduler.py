@@ -136,7 +136,6 @@ class StreamingCompanyProcessor:
     
     def _process_device_streaming(self, device_id: str) -> bool:
         """개별 디바이스 스트리밍 처리"""
-        # 로그 컨텍스트를 먼저 설정
         set_context(company_domain=self.company_domain, device_id=device_id)
         logger.info(f"디바이스 '{device_id}' 스트리밍 처리 시작")
         
@@ -400,7 +399,7 @@ class StreamingGlobalScheduler:
                     logger.error(f"회사 '{company}' 스트리밍 처리 중 예외: {e}")
         
         logger.info(f"전체 회사 스트리밍 처리 완료: {success_count}/{len(self.company_processors)} 성공")
-    
+
     def _safe_process_company_streaming(self, company: str, processor: StreamingCompanyProcessor) -> bool:
         """안전한 회사 스트리밍 처리 (오류 격리)"""
         try:
@@ -655,26 +654,20 @@ class StreamingGlobalScheduler:
                     'device_list': processor.devices
                 }
             
-            # 캐시 상태 요약
+            # 캐시 상태 요약 (간소화)
             total_cache_files = 0
             total_cache_size_mb = 0
             
-            for company, processor in self.company_processors.items():
-                if processor.devices:
-                    try:
-                        sample_device = processor.devices[0]
-                        server_id = processor.db_manager.get_server_by_device_id(company, sample_device)
-                        if server_id:
-                            config = processor._create_device_config(sample_device, server_id)
-                            streaming_pipeline = StreamingDataPipeline(config)
-                            metrics = streaming_pipeline.get_pipeline_metrics()
-                            
-                            if 'cache_metrics' in metrics:
-                                cache_info = metrics['cache_metrics']
-                                total_cache_files += cache_info.get('total_files', 0)
-                                total_cache_size_mb += cache_info.get('total_size_mb', 0)
-                    except Exception:
-                        pass  # 개별 오류는 무시
+            cache_base = "cache"
+            if os.path.exists(cache_base):
+                for root, dirs, files in os.walk(cache_base):
+                    pkl_files = [f for f in files if f.endswith('.pkl')]
+                    total_cache_files += len(pkl_files)
+                    for f in pkl_files:
+                        try:
+                            total_cache_size_mb += os.path.getsize(os.path.join(root, f)) / (1024 * 1024)
+                        except:
+                            pass
             
             status['cache_summary'] = {
                 'total_files': total_cache_files,

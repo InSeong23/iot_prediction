@@ -46,8 +46,11 @@ class StreamingPreprocessor:
         
         logger.info(f"스트리밍 전처리기 초기화: {self.company_domain}/{self.device_id}")
     
+    # streaming_preprocessor.py 수정
+    # calculate_and_cache_impacts 메서드에 cache_metadata 저장 추가
+
     def calculate_and_cache_impacts(self, jvm_df: pd.DataFrame, sys_df: pd.DataFrame, 
-                                   cache_key: str, force_recalculate=False) -> Optional[pd.DataFrame]:
+                                cache_key: str, force_recalculate=False) -> Optional[pd.DataFrame]:
         """영향도 계산 및 캐싱"""
         impact_file = os.path.join(self.impact_dir, f"impact_{cache_key}.pkl")
         
@@ -91,6 +94,54 @@ class StreamingPreprocessor:
                 logger.warning(f"영향도 캐시 저장 실패: {e}")
         
         return impact_df
+
+    # generate_and_cache_features 메서드에도 동일하게 추가
+    def generate_and_cache_features(self, jvm_df: pd.DataFrame, cache_key: str, 
+                                force_recalculate=False) -> Optional[pd.DataFrame]:
+        """특성 생성 및 캐싱"""
+        features_file = os.path.join(self.features_dir, f"features_{cache_key}.pkl")
+        
+        # 캐시된 특성이 있고 강제 재계산이 아니면 로드
+        if not force_recalculate and os.path.exists(features_file):
+            try:
+                with open(features_file, 'rb') as f:
+                    features_df = pickle.load(f)
+                logger.info(f"캐시된 특성 사용: {cache_key}")
+                return features_df
+            except Exception as e:
+                logger.warning(f"특성 캐시 로드 실패: {e}")
+        
+        # 특성 생성
+        logger.info(f"특성 생성 시작: {cache_key}")
+        features_df = self._generate_features(jvm_df)
+        
+        if features_df is not None and not features_df.empty:
+            # 캐시에 저장
+            try:
+                with open(features_file, 'wb') as f:
+                    pickle.dump(features_df, f)
+                
+                # 메타데이터도 함께 저장
+                meta_file = os.path.join(self.features_dir, f"features_{cache_key}_meta.json")
+                metadata = {
+                    'created_at': datetime.now().isoformat(),
+                    'company_domain': self.company_domain,
+                    'device_id': self.device_id,
+                    'jvm_records': len(jvm_df),
+                    'feature_records': len(features_df),
+                    'unique_features': features_df['feature_name'].nunique() if 'feature_name' in features_df.columns else 0
+                }
+                
+                with open(meta_file, 'w') as f:
+                    json.dump(metadata, f, indent=2)
+                
+                
+                logger.info(f"특성 캐시 저장 완료: {cache_key} ({len(features_df)}개)")
+                
+            except Exception as e:
+                logger.warning(f"특성 캐시 저장 실패: {e}")
+        
+        return features_df
     
     def generate_and_cache_features(self, jvm_df: pd.DataFrame, cache_key: str, 
                                    force_recalculate=False) -> Optional[pd.DataFrame]:
@@ -182,16 +233,25 @@ class StreamingPreprocessor:
                 logger.error("피봇 테이블 생성 실패")
                 return None
             
-            # 시계열 리샘플링
-            jvm_resampled = jvm_pivot.resample(self.resample_interval).mean().interpolate(method='linear', limit=2)
-            sys_resampled = sys_pivot.resample(self.resample_interval).mean().interpolate(method='linear', limit=2)
+            # 시계열 리샘플링 - 1분 단위로 변경
+            jvm_resampled = jvm_pivot.resample('1min').mean().interpolate(method='linear', limit=5)
+            sys_resampled = sys_pivot.resample('1min').mean().interpolate(method='linear', limit=5)
             
             # 공통 시간대 확인
             common_times = jvm_resampled.index.intersection(sys_resampled.index)
             
+            logger.info(f"공통 시간대 수: {len(common_times)}")
+            
             if len(common_times) < 5:
                 logger.warning(f"공통 시간대가 너무 적음: {len(common_times)}개")
-                return None
+                # 원본 데이터로 다시 시도
+                common_times = jvm_pivot.index.intersection(sys_pivot.index)
+                if len(common_times) >= 5:
+                    logger.info(f"원본 데이터 사용: {len(common_times)}개")
+                    jvm_resampled = jvm_pivot
+                    sys_resampled = sys_pivot
+                else:
+                    return None
             
             # 상관관계 계산
             impact_scores = self._compute_correlations(jvm_resampled, sys_resampled, common_times)

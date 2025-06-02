@@ -236,15 +236,6 @@ class StreamingDataPipeline(BasePipeline):
             )
             preprocessor.cleanup_cache(max_age_hours)
             
-            # 캐시 메타데이터 정리
-            self._cleanup_cache_metadata(max_age_hours)
-            
-            # 작업 로그 기록
-            self._log_job_result('cache_cleanup', True, {
-                'max_age_hours': max_age_hours,
-                'cleanup_time': datetime.now().isoformat()
-            })
-            
             logger.info("캐시 정리 파이프라인 완료")
             return True
             
@@ -252,26 +243,6 @@ class StreamingDataPipeline(BasePipeline):
             logger.error(f"캐시 정리 파이프라인 오류: {e}")
             return False
     
-    def _cleanup_cache_metadata(self, max_age_hours: int):
-        """데이터베이스 캐시 메타데이터 정리"""
-        try:
-            db = self.get_db_manager()
-            
-            # 만료된 캐시 메타데이터 삭제
-            cleanup_query = """
-            DELETE FROM cache_metadata 
-            WHERE expires_at < NOW() OR created_at < DATE_SUB(NOW(), INTERVAL %s HOUR)
-            """
-            
-            result = db.execute_query(cleanup_query, (max_age_hours,))
-            
-            if result:
-                logger.info("캐시 메타데이터 정리 완료")
-            else:
-                logger.warning("캐시 메타데이터 정리 실패")
-                
-        except Exception as e:
-            logger.error(f"캐시 메타데이터 정리 오류: {e}")
     
     def _check_pipeline_status(self, **kwargs) -> bool:
         """파이프라인 상태 확인"""
@@ -329,88 +300,6 @@ class StreamingDataPipeline(BasePipeline):
             logger.error(f"파이프라인 상태 확인 오류: {e}")
             return False
     
-    def _log_job_result(self, job_type: str, success: bool, details: Dict[str, Any]):
-        """작업 결과 로그 기록"""
-        try:
-            db = self.get_db_manager()
-            company_domain = self.config.get('company_domain')
-            server_id = self.config.get_server_id()
-            
-            if not company_domain or not server_id:
-                return
-            
-            # 작업 로그 삽입
-            insert_query = """
-            INSERT INTO job_logs 
-            (company_domain, server_no, job_type, job_status, start_time, end_time, 
-             records_processed, details)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """
-            
-            import json
-            status = 'completed' if success else 'failed'
-            now = datetime.now()
-            
-            # 처리된 레코드 수 계산
-            records_processed = 0
-            for key in ['jvm_records', 'sys_records', 'impact_records', 'feature_records']:
-                if key in details:
-                    records_processed += details[key]
-            
-            params = (
-                company_domain,
-                server_id,
-                job_type,
-                status,
-                now,  # start_time (간소화)
-                now,  # end_time
-                records_processed,
-                json.dumps(details)
-            )
-            
-            db.execute_query(insert_query, params)
-            
-        except Exception as e:
-            logger.error(f"작업 로그 기록 오류: {e}")
-    
-    def _get_recent_job_logs(self, hours: int = 24) -> list:
-        """최근 작업 로그 조회"""
-        try:
-            db = self.get_db_manager()
-            company_domain = self.config.get('company_domain')
-            server_id = self.config.get_server_id()
-            
-            if not company_domain or not server_id:
-                return []
-            
-            query = """
-            SELECT job_type, job_status, start_time, end_time, records_processed, details
-            FROM job_logs
-            WHERE company_domain = %s AND server_no = %s
-            AND start_time >= DATE_SUB(NOW(), INTERVAL %s HOUR)
-            ORDER BY start_time DESC
-            """
-            
-            results = db.fetch_all(query, (company_domain, server_id, hours))
-            
-            if results:
-                return [
-                    {
-                        'job_type': row[0],
-                        'job_status': row[1],
-                        'start_time': row[2],
-                        'end_time': row[3],
-                        'records_processed': row[4],
-                        'details': row[5]
-                    }
-                    for row in results
-                ]
-            else:
-                return []
-                
-        except Exception as e:
-            logger.error(f"작업 로그 조회 오류: {e}")
-            return []
     
     def get_pipeline_metrics(self) -> Dict[str, Any]:
         """파이프라인 성능 메트릭 조회"""

@@ -301,3 +301,32 @@ class ConfigWrapper:
             'memory': self.config_dict.get('memory_threshold', 80.0),
             'disk': self.config_dict.get('disk_threshold', 85.0)
         }
+    
+    def get_prediction_interval(self, hours=None):
+        """예측 간격 조회 (분 단위) - 새로 추가"""
+        # 적응적 간격 설정이 활성화된 경우
+        if self.config_dict.get('adaptive_interval', True) and hours:
+            from config.settings import PREDICTION_CONFIG
+            interval_map = PREDICTION_CONFIG.get('interval_by_horizon', {})
+            
+            # 가장 가까운 범위의 간격 찾기
+            for horizon, interval in sorted(interval_map.items()):
+                if hours <= horizon:
+                    return interval
+            
+            # 매핑되지 않은 경우 가장 큰 간격 사용
+            max_interval = max(interval_map.values()) if interval_map else 60
+            return max_interval
+        
+        # 기본 설정값 사용
+        return self.config_dict.get('prediction_interval_minutes', 5)
+    
+    def get_prediction_config(self):
+        """예측 설정 딕셔너리 반환 - 새로 추가"""
+        return {
+            'prediction_horizon': self.config_dict.get('prediction_horizon', 24),
+            'training_window': self.config_dict.get('training_window', '3d'),
+            'model_type': self.config_dict.get('model_type', 'gradient_boosting'),
+            'prediction_interval_minutes': self.config_dict.get('prediction_interval_minutes', 5),
+            'adaptive_interval': self.config_dict.get('adaptive_interval', True)
+        }

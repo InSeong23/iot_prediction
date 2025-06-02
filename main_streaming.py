@@ -253,8 +253,6 @@ def run_status_check():
                 logger.info(f"    디바이스 수: {info['devices']}")
                 if info['device_list']:
                     logger.info(f"    디바이스 목록: {', '.join(info['device_list'])}")
-                else:
-                    logger.info(f"    디바이스 목록: 없음")
         else:
             logger.warning("등록된 회사가 없습니다.")
             logger.info("InfluxDB에서 데이터를 확인해주세요.")
@@ -310,13 +308,13 @@ def run_migration_setup():
             logger.error("환경변수 설정 오류")
             return False
         
-        logger.info("✅ 스트리밍 아키텍처 마이그레이션 완료!")
+        logger.info("스트리밍 아키텍처 마이그레이션 완료!")
         logger.info("")
-        logger.info("🚀 다음 단계:")
+        logger.info("다음 단계:")
         logger.info("  1. python main_streaming.py --mode scheduler")
         logger.info("  2. 또는 docker run으로 컨테이너 실행")
         logger.info("")
-        logger.info("📊 주요 변경사항:")
+        logger.info("주요 변경사항:")
         logger.info("  - InfluxDB 직접 조회로 MySQL 부하 감소")
         logger.info("  - 파일 캐싱으로 중간 데이터 효율 관리")
         logger.info("  - 불필요한 테이블 제거로 DB 최적화")
