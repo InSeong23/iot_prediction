@@ -50,13 +50,13 @@ class StreamingModelManager:
         
         try:
             # 1. 캐시된 영향도 데이터 로드
-            impact_df = self._load_cached_impacts(cache_key)
+            impact_df = self._load_cached_impacts()
             if impact_df is None or impact_df.empty:
                 logger.error("캐시된 영향도 데이터가 없습니다")
                 return False
             
-            # 2. 캐시된 특성 데이터 로드
-            features_df = self._load_cached_features(cache_key)
+            # 2. 캐시된 특성 데이터 로드 (고정 캐시)
+            features_df = self._load_cached_features()
             if features_df is None or features_df.empty:
                 logger.error("캐시된 특성 데이터가 없습니다")
                 return False
@@ -82,9 +82,9 @@ class StreamingModelManager:
             logger.error(f"캐시 기반 모델 학습 오류: {e}")
             return False
     
-    def _load_cached_impacts(self, cache_key: str) -> Optional[pd.DataFrame]:
-        """캐시된 영향도 데이터 로드"""
-        impact_file = os.path.join(self.cache_dir, "impacts", f"impact_{cache_key}.pkl")
+    def _load_cached_impacts(self) -> Optional[pd.DataFrame]:
+        """캐시된 영향도 데이터 로드 - 고정 캐시"""
+        impact_file = os.path.join(self.cache_dir, "impacts", "impact_latest.pkl")
         
         if os.path.exists(impact_file):
             try:
@@ -94,10 +94,10 @@ class StreamingModelManager:
                 logger.error(f"영향도 캐시 로드 오류: {e}")
         
         return None
-    
-    def _load_cached_features(self, cache_key: str) -> Optional[pd.DataFrame]:
-        """캐시된 특성 데이터 로드"""
-        features_file = os.path.join(self.cache_dir, "features", f"features_{cache_key}.pkl")
+
+    def _load_cached_features(self) -> Optional[pd.DataFrame]:
+        """캐시된 특성 데이터 로드 - 고정 캐시"""
+        features_file = os.path.join(self.cache_dir, "features", "features_latest.pkl")
         
         if os.path.exists(features_file):
             try:

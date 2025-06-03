@@ -399,7 +399,12 @@ class StreamingGlobalScheduler:
                     logger.error(f"회사 '{company}' 스트리밍 처리 중 예외: {e}")
         
         logger.info(f"전체 회사 스트리밍 처리 완료: {success_count}/{len(self.company_processors)} 성공")
-
+    def _log_job_result(self, job_type: str, success: bool, details: dict = None):
+        """작업 결과 로깅 (DB 저장 없이)"""
+        if success:
+            logger.info(f"{job_type} 작업 완료: {details}")
+        else:
+            logger.error(f"{job_type} 작업 실패: {details}")
     def _safe_process_company_streaming(self, company: str, processor: StreamingCompanyProcessor) -> bool:
         """안전한 회사 스트리밍 처리 (오류 격리)"""
         try:

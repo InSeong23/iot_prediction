@@ -92,34 +92,23 @@ class SystemResourcePredictor:
         if hasattr(self, 'db_manager') and self.db_manager:
             self.db_manager.close()
     
-    def align_prediction_time_to_minute(self, time_val):
-        """예측 시간을 분 단위 정각으로 정렬  """
-        if isinstance(time_val, str):
-            time_val = datetime.fromisoformat(time_val.replace('Z', '+00:00'))
-        
-        # 타임존 정보를 제거하고 분 단위 정각으로 정렬
-        if time_val.tzinfo is not None:
-            # UTC 시간을 로컬 시간으로 변환 후 타임존 제거
-            time_val = time_val.replace(tzinfo=None)
-        
-        # 초와 마이크로초를 0으로 설정하여 분 단위 정각으로 정렬
-        return time_val.replace(second=0, microsecond=0)
-    def align_prediction_time_to_interval(self, time_val, interval_minutes):
+    def align_prediction_time(self, time_val, interval_minutes=None):
         """예측 시간을 지정된 간격으로 정렬"""
         if isinstance(time_val, str):
             time_val = datetime.fromisoformat(time_val.replace('Z', '+00:00'))
         
-        # 타임존 정보를 제거
         if time_val.tzinfo is not None:
             time_val = time_val.replace(tzinfo=None)
         
-        # 초와 마이크로초를 0으로 설정
         time_val = time_val.replace(second=0, microsecond=0)
         
-        # 분을 간격에 맞게 정렬
-        aligned_minute = (time_val.minute // interval_minutes) * interval_minutes
+        if interval_minutes and interval_minutes > 1:
+            aligned_minute = (time_val.minute // interval_minutes) * interval_minutes
+            time_val = time_val.replace(minute=aligned_minute)
         
-        return time_val.replace(minute=aligned_minute)    
+        return time_val
+
+    # predict_future_usage 메서드 수정 부분
     def predict_future_usage(self, hours=None):
         """미래 자원 사용량 예측 - 설정 가능한 간격으로 예측"""
         if hours is None:
@@ -166,7 +155,7 @@ class SystemResourcePredictor:
         
         # 현재 시간을 설정된 간격으로 정렬
         now = datetime.now()
-        aligned_now = self.align_prediction_time_to_interval(now, prediction_interval_minutes)
+        aligned_now = self.align_prediction_time(now, prediction_interval_minutes)
         next_prediction = aligned_now + timedelta(minutes=prediction_interval_minutes)
         
         # 설정된 간격으로 예측
@@ -210,7 +199,7 @@ class SystemResourcePredictor:
         alerts = self.check_threshold_crossings(prediction_times, predictions)
         
         # 결과 구조화 (시간을 문자열로 변환)
-        time_format = f'%Y-%m-%d %H:%M:00' if prediction_interval_minutes < 60 else '%Y-%m-%d %H:00:00'
+        time_format = '%Y-%m-%d %H:%M:00' if prediction_interval_minutes < 60 else '%Y-%m-%d %H:00:00'
         
         result = {
             'times': [t.strftime(time_format) for t in prediction_times],
@@ -223,9 +212,10 @@ class SystemResourcePredictor:
         logger.info(f"예측 완료: {len(prediction_times)}개 포인트, {prediction_interval_minutes}분 간격")
         
         return result
-    
+
+    # update_prediction_accuracy 메서드 수정 부분
     def update_prediction_accuracy(self):
-        """예측 정확도 업데이트 - 분 단위 정각 매칭  """
+        """예측 정확도 업데이트 - 분 단위 정각 매칭"""
         # 디바이스 필터 설정
         device_filter = ""
         params = [self.company_domain, self.server_id]
@@ -251,7 +241,7 @@ class SystemResourcePredictor:
             logger.info("업데이트할 예측 결과가 없습니다.")
             return True
         
-        logger.info(f"예측 정확도 업데이트: {len(predictions)}개 항목 ")
+        logger.info(f"예측 정확도 업데이트: {len(predictions)}개 항목")
         
         # 각 예측에 대한 실제 값 조회 및 업데이트
         updated_count = 0
@@ -816,59 +806,51 @@ class SystemResourcePredictor:
     
     def get_latest_jvm_metrics(self, minutes=30):
         """최근 JVM 메트릭 데이터 조회"""
-        # 스트리밍 아키텍처 확인
         use_streaming = os.getenv('ARCHITECTURE', 'streaming').lower() == 'streaming'
         
-        if use_streaming:
-            # 스트리밍 방식
-            return self._get_latest_jvm_metrics_streaming(minutes)
-        else:
-            # 기존 MySQL 방식
-            return self._get_latest_jvm_metrics_mysql(minutes)
-    def _get_latest_jvm_metrics_streaming(self, minutes=30):
-        """스트리밍 방식으로 최근 JVM 메트릭 조회"""
         try:
-            from data.streaming_collector import StreamingDataCollector
-            
-            collector = StreamingDataCollector(
-                self.config, self.company_domain, self.device_id
-            )
-            
-            # 최근 데이터 수집
-            jvm_df, _ = collector.get_latest_data(minutes)
-            
-            if jvm_df.empty:
-                logger.warning("최근 JVM 메트릭 데이터가 없습니다. 더미 데이터를 사용합니다.")
-                return self._create_dummy_metrics()
-            
-            # 애플리케이션별 데이터 분리
-            app_features = {}
-            
-            for app, app_data in jvm_df.groupby('application'):
-                feature_data = {}
+            if use_streaming:
+                from data.streaming_collector import StreamingDataCollector
                 
-                # 메트릭별 최근 값 (평균)
-                for metric_type, metric_data in app_data.groupby('metric_type'):
-                    feature_data[metric_type] = metric_data['value'].mean()
+                collector = StreamingDataCollector(
+                    self.config, self.company_domain, self.device_id
+                )
                 
-                # 시간 특성 추가
-                latest_time = app_data['time'].max()
-                feature_data['hour'] = latest_time.hour
-                feature_data['day_of_week'] = latest_time.weekday()
-                feature_data['is_weekend'] = 1 if latest_time.weekday() >= 5 else 0
+                jvm_df, _ = collector.get_latest_data(minutes)
                 
-                # 데이터프레임으로 변환 (1행)
-                app_features[app] = pd.DataFrame([feature_data])
-            
-            if not app_features:
-                logger.warning("애플리케이션 메트릭 데이터가 없습니다. 더미 데이터를 사용합니다.")
-                return self._create_dummy_metrics()
-            
-            return app_features
-            
+                if jvm_df.empty:
+                    logger.warning("최근 JVM 메트릭 데이터가 없습니다. 더미 데이터를 사용합니다.")
+                    return self._create_dummy_metrics()
+                
+                app_features = {}
+                
+                for app, app_data in jvm_df.groupby('application'):
+                    feature_data = {}
+                    
+                    for metric_type, metric_data in app_data.groupby('metric_type'):
+                        feature_data[metric_type] = metric_data['value'].mean()
+                    
+                    latest_time = app_data['time'].max()
+                    feature_data['hour'] = latest_time.hour
+                    feature_data['day_of_week'] = latest_time.weekday()
+                    feature_data['is_weekend'] = 1 if latest_time.weekday() >= 5 else 0
+                    
+                    app_features[app] = pd.DataFrame([feature_data])
+                
+                if not app_features:
+                    logger.warning("애플리케이션 메트릭 데이터가 없습니다. 더미 데이터를 사용합니다.")
+                    return self._create_dummy_metrics()
+                
+                return app_features
+                
+            else:
+                # MySQL 방식 (레거시 호환성)
+                return self._get_latest_jvm_metrics_mysql(minutes)
+                
         except Exception as e:
-            logger.error(f"스트리밍 JVM 메트릭 조회 오류: {e}")
+            logger.error(f"JVM 메트릭 조회 오류: {e}")
             return self._create_dummy_metrics()
+        
     def _create_dummy_metrics(self):
         """더미 JVM 메트릭 데이터 생성"""
         logger.info("더미 JVM 메트릭 데이터 생성")

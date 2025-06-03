@@ -85,19 +85,17 @@ class StreamingDataPipeline(BasePipeline):
                 company_domain=company_domain,
                 device_id=device_id
             )
-            
-            # 캐시 키 생성
-            cache_key = f"{start_time.strftime('%Y%m%d')}_{end_time.strftime('%Y%m%d')}"
+
             
             # 영향도 계산 및 캐싱
             force_recalc = kwargs.get('force_recalculate', False)
             impact_df = preprocessor.calculate_and_cache_impacts(
-                jvm_df, sys_df, cache_key, force_recalc
+                jvm_df, sys_df, force_recalculate=force_recalc
             )
             
             # 특성 생성 및 캐싱
             features_df = preprocessor.generate_and_cache_features(
-                jvm_df, cache_key, force_recalc
+                jvm_df, force_recalculate=force_recalc
             )
             
             # 결과 검증

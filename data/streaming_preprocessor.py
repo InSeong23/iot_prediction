@@ -46,36 +46,76 @@ class StreamingPreprocessor:
         
         logger.info(f"스트리밍 전처리기 초기화: {self.company_domain}/{self.device_id}")
     
-    # streaming_preprocessor.py 수정
-    # calculate_and_cache_impacts 메서드에 cache_metadata 저장 추가
-
+    def _cache_data(self, data: Any, cache_dir: str, cache_key: str, data_type: str) -> bool:
+        """데이터 캐싱 (통합 함수)"""
+        cache_file = os.path.join(cache_dir, f"{data_type}_{cache_key}.pkl")
+        
+        try:
+            with open(cache_file, 'wb') as f:
+                pickle.dump(data, f)
+            
+            meta_file = os.path.join(cache_dir, f"{data_type}_{cache_key}_meta.json")
+            metadata = {
+                'created_at': datetime.now().isoformat(),
+                'company_domain': self.company_domain,
+                'device_id': self.device_id,
+                f'{data_type}_records': len(data) if hasattr(data, '__len__') else 0
+            }
+            
+            with open(meta_file, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            
+            logger.info(f"{data_type} 캐시 저장 완료: {cache_key}")
+            return True
+            
+        except Exception as e:
+            logger.warning(f"{data_type} 캐시 저장 실패: {e}")
+            return False
+    
+    def _load_cache_data(self, cache_dir: str, cache_key: str, data_type: str) -> Optional[Any]:
+        """캐시 데이터 로드 (통합 함수)"""
+        cache_file = os.path.join(cache_dir, f"{data_type}_{cache_key}.pkl")
+        
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'rb') as f:
+                    return pickle.load(f)
+            except Exception as e:
+                logger.error(f"{data_type} 캐시 로드 오류: {e}")
+        
+        return None
+    
     def calculate_and_cache_impacts(self, jvm_df: pd.DataFrame, sys_df: pd.DataFrame, 
-                                cache_key: str, force_recalculate=False) -> Optional[pd.DataFrame]:
-        """영향도 계산 및 캐싱"""
-        impact_file = os.path.join(self.impact_dir, f"impact_{cache_key}.pkl")
+                                cache_key: str = None, force_recalculate=False) -> Optional[pd.DataFrame]:
+        """영향도 계산 및 캐싱 - 고정 캐시 사용"""
+        # 고정 캐시 파일명 사용
+        impact_file = os.path.join(self.impact_dir, "impact_latest.pkl")
         
         # 캐시된 영향도가 있고 강제 재계산이 아니면 로드
         if not force_recalculate and os.path.exists(impact_file):
             try:
-                with open(impact_file, 'rb') as f:
-                    impact_df = pickle.load(f)
-                logger.info(f"캐시된 영향도 사용: {cache_key}")
-                return impact_df
+                # 캐시 파일 시간 확인 (6시간 이내)
+                file_time = datetime.fromtimestamp(os.path.getmtime(impact_file))
+                if (datetime.now() - file_time).total_seconds() < 6 * 3600:
+                    with open(impact_file, 'rb') as f:
+                        impact_df = pickle.load(f)
+                    logger.info("캐시된 영향도 사용")
+                    return impact_df
             except Exception as e:
                 logger.warning(f"영향도 캐시 로드 실패: {e}")
         
         # 영향도 계산
-        logger.info(f"영향도 계산 시작: {cache_key}")
+        logger.info("영향도 계산 시작")
         impact_df = self._calculate_impact_scores(jvm_df, sys_df)
         
         if impact_df is not None and not impact_df.empty:
-            # 캐시에 저장
+            # 캐시에 저장 (덮어쓰기)
             try:
                 with open(impact_file, 'wb') as f:
                     pickle.dump(impact_df, f)
                 
-                # 메타데이터도 함께 저장
-                meta_file = os.path.join(self.impact_dir, f"impact_{cache_key}_meta.json")
+                # 메타데이터도 업데이트
+                meta_file = os.path.join(self.impact_dir, "impact_latest_meta.json")
                 metadata = {
                     'created_at': datetime.now().isoformat(),
                     'company_domain': self.company_domain,
@@ -88,88 +128,45 @@ class StreamingPreprocessor:
                 with open(meta_file, 'w') as f:
                     json.dump(metadata, f, indent=2)
                 
-                logger.info(f"영향도 캐시 저장 완료: {cache_key} ({len(impact_df)}개)")
+                logger.info(f"영향도 캐시 업데이트 완료 ({len(impact_df)}개)")
                 
             except Exception as e:
                 logger.warning(f"영향도 캐시 저장 실패: {e}")
         
         return impact_df
 
-    # generate_and_cache_features 메서드에도 동일하게 추가
-    def generate_and_cache_features(self, jvm_df: pd.DataFrame, cache_key: str, 
-                                force_recalculate=False) -> Optional[pd.DataFrame]:
-        """특성 생성 및 캐싱"""
-        features_file = os.path.join(self.features_dir, f"features_{cache_key}.pkl")
-        
-        # 캐시된 특성이 있고 강제 재계산이 아니면 로드
-        if not force_recalculate and os.path.exists(features_file):
-            try:
-                with open(features_file, 'rb') as f:
-                    features_df = pickle.load(f)
-                logger.info(f"캐시된 특성 사용: {cache_key}")
-                return features_df
-            except Exception as e:
-                logger.warning(f"특성 캐시 로드 실패: {e}")
-        
-        # 특성 생성
-        logger.info(f"특성 생성 시작: {cache_key}")
-        features_df = self._generate_features(jvm_df)
-        
-        if features_df is not None and not features_df.empty:
-            # 캐시에 저장
-            try:
-                with open(features_file, 'wb') as f:
-                    pickle.dump(features_df, f)
-                
-                # 메타데이터도 함께 저장
-                meta_file = os.path.join(self.features_dir, f"features_{cache_key}_meta.json")
-                metadata = {
-                    'created_at': datetime.now().isoformat(),
-                    'company_domain': self.company_domain,
-                    'device_id': self.device_id,
-                    'jvm_records': len(jvm_df),
-                    'feature_records': len(features_df),
-                    'unique_features': features_df['feature_name'].nunique() if 'feature_name' in features_df.columns else 0
-                }
-                
-                with open(meta_file, 'w') as f:
-                    json.dump(metadata, f, indent=2)
-                
-                
-                logger.info(f"특성 캐시 저장 완료: {cache_key} ({len(features_df)}개)")
-                
-            except Exception as e:
-                logger.warning(f"특성 캐시 저장 실패: {e}")
-        
-        return features_df
     
-    def generate_and_cache_features(self, jvm_df: pd.DataFrame, cache_key: str, 
-                                   force_recalculate=False) -> Optional[pd.DataFrame]:
-        """특성 생성 및 캐싱"""
-        features_file = os.path.join(self.features_dir, f"features_{cache_key}.pkl")
+    def generate_and_cache_features(self, jvm_df: pd.DataFrame, cache_key: str = None, 
+                                force_recalculate=False) -> Optional[pd.DataFrame]:
+        """특성 생성 및 캐싱 - 고정 캐시 사용"""
+        # 고정 캐시 파일명 사용
+        features_file = os.path.join(self.features_dir, "features_latest.pkl")
         
         # 캐시된 특성이 있고 강제 재계산이 아니면 로드
         if not force_recalculate and os.path.exists(features_file):
             try:
-                with open(features_file, 'rb') as f:
-                    features_df = pickle.load(f)
-                logger.info(f"캐시된 특성 사용: {cache_key}")
-                return features_df
+                # 캐시 파일 시간 확인 (6시간 이내)
+                file_time = datetime.fromtimestamp(os.path.getmtime(features_file))
+                if (datetime.now() - file_time).total_seconds() < 6 * 3600:
+                    with open(features_file, 'rb') as f:
+                        features_df = pickle.load(f)
+                    logger.info("캐시된 특성 사용")
+                    return features_df
             except Exception as e:
                 logger.warning(f"특성 캐시 로드 실패: {e}")
         
         # 특성 생성
-        logger.info(f"특성 생성 시작: {cache_key}")
+        logger.info("특성 생성 시작")
         features_df = self._generate_features(jvm_df)
         
         if features_df is not None and not features_df.empty:
-            # 캐시에 저장
+            # 캐시에 저장 (덮어쓰기)
             try:
                 with open(features_file, 'wb') as f:
                     pickle.dump(features_df, f)
                 
-                # 메타데이터도 함께 저장
-                meta_file = os.path.join(self.features_dir, f"features_{cache_key}_meta.json")
+                # 메타데이터도 업데이트
+                meta_file = os.path.join(self.features_dir, "features_latest_meta.json")
                 metadata = {
                     'created_at': datetime.now().isoformat(),
                     'company_domain': self.company_domain,
@@ -182,7 +179,7 @@ class StreamingPreprocessor:
                 with open(meta_file, 'w') as f:
                     json.dump(metadata, f, indent=2)
                 
-                logger.info(f"특성 캐시 저장 완료: {cache_key} ({len(features_df)}개)")
+                logger.info(f"특성 캐시 업데이트 완료 ({len(features_df)}개)")
                 
             except Exception as e:
                 logger.warning(f"특성 캐시 저장 실패: {e}")
@@ -421,9 +418,9 @@ class StreamingPreprocessor:
         
         return time_features
     
-    def load_cached_impacts(self, cache_key: str) -> Optional[pd.DataFrame]:
-        """캐시된 영향도 로드"""
-        impact_file = os.path.join(self.impact_dir, f"impact_{cache_key}.pkl")
+    def load_cached_impacts(self, cache_key: str = None) -> Optional[pd.DataFrame]:
+        """캐시된 영향도 로드 - 고정 캐시 사용"""
+        impact_file = os.path.join(self.impact_dir, "impact_latest.pkl")
         
         if os.path.exists(impact_file):
             try:
@@ -433,10 +430,10 @@ class StreamingPreprocessor:
                 logger.error(f"영향도 캐시 로드 오류: {e}")
         
         return None
-    
-    def load_cached_features(self, cache_key: str) -> Optional[pd.DataFrame]:
-        """캐시된 특성 로드"""
-        features_file = os.path.join(self.features_dir, f"features_{cache_key}.pkl")
+   
+    def load_cached_features(self, cache_key: str = None) -> Optional[pd.DataFrame]:
+        """캐시된 특성 로드 - 고정 캐시 사용"""
+        features_file = os.path.join(self.features_dir, "features_latest.pkl")
         
         if os.path.exists(features_file):
             try:
@@ -446,56 +443,46 @@ class StreamingPreprocessor:
                 logger.error(f"특성 캐시 로드 오류: {e}")
         
         return None
-    
+   
     def cleanup_cache(self, max_age_hours=48):
-        """오래된 캐시 정리"""
-        logger.info(f"전처리 캐시 정리: {max_age_hours}시간 이상 파일 삭제")
-        
-        cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
-        deleted_count = 0
-        
+        """오래된 캐시 정리 - 고정 캐시 방식에서는 간소화"""
+        logger.info("캐시 정리 - 고정 캐시 방식으로 자동 관리됨")
+        # 필요시 오래된 메타데이터 파일만 정리
         for cache_subdir in [self.impact_dir, self.features_dir]:
             try:
                 for filename in os.listdir(cache_subdir):
-                    filepath = os.path.join(cache_subdir, filename)
-                    
-                    if os.path.isfile(filepath):
-                        file_time = datetime.fromtimestamp(os.path.getmtime(filepath))
-                        
-                        if file_time < cutoff_time:
-                            os.remove(filepath)
-                            deleted_count += 1
-                            logger.debug(f"캐시 파일 삭제: {filename}")
-                
+                    # _meta.json 파일 중 오래된 것만 삭제
+                    if filename.endswith('_meta.json') and not filename.startswith(('impact_latest', 'features_latest')):
+                        filepath = os.path.join(cache_subdir, filename)
+                        os.remove(filepath)
+                        logger.debug(f"오래된 메타데이터 삭제: {filename}")
             except Exception as e:
-                logger.error(f"캐시 정리 오류 ({cache_subdir}): {e}")
-        
-        logger.info(f"전처리 캐시 정리 완료: {deleted_count}개 파일 삭제")
-    
+                logger.error(f"캐시 정리 오류: {e}")
+   
     def get_cache_status(self) -> Dict:
-        """캐시 상태 조회"""
-        try:
-            impact_files = [f for f in os.listdir(self.impact_dir) if f.endswith('.pkl')]
-            features_files = [f for f in os.listdir(self.features_dir) if f.endswith('.pkl')]
-            
-            impact_size = sum(os.path.getsize(os.path.join(self.impact_dir, f)) for f in impact_files)
-            features_size = sum(os.path.getsize(os.path.join(self.features_dir, f)) for f in features_files)
-            
-            return {
-                'cache_dir': self.cache_dir,
-                'impacts': {
-                    'file_count': len(impact_files),
-                    'size_mb': round(impact_size / (1024 * 1024), 2),
-                    'files': impact_files
-                },
-                'features': {
-                    'file_count': len(features_files),
-                    'size_mb': round(features_size / (1024 * 1024), 2),
-                    'files': features_files
-                },
-                'total_size_mb': round((impact_size + features_size) / (1024 * 1024), 2)
-            }
-            
-        except Exception as e:
-            logger.error(f"캐시 상태 조회 오류: {e}")
-            return {'error': str(e)}
+       """캐시 상태 조회"""
+       try:
+           impact_files = [f for f in os.listdir(self.impact_dir) if f.endswith('.pkl')]
+           features_files = [f for f in os.listdir(self.features_dir) if f.endswith('.pkl')]
+           
+           impact_size = sum(os.path.getsize(os.path.join(self.impact_dir, f)) for f in impact_files)
+           features_size = sum(os.path.getsize(os.path.join(self.features_dir, f)) for f in features_files)
+           
+           return {
+               'cache_dir': self.cache_dir,
+               'impacts': {
+                   'file_count': len(impact_files),
+                   'size_mb': round(impact_size / (1024 * 1024), 2),
+                   'files': impact_files
+               },
+               'features': {
+                   'file_count': len(features_files),
+                   'size_mb': round(features_size / (1024 * 1024), 2),
+                   'files': features_files
+               },
+               'total_size_mb': round((impact_size + features_size) / (1024 * 1024), 2)
+           }
+           
+       except Exception as e:
+           logger.error(f"캐시 상태 조회 오류: {e}")
+           return {'error': str(e)}

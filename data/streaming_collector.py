@@ -59,17 +59,15 @@ class StreamingDataCollector:
             end_time = datetime.now()
         
         if start_time is None:
-            # 기본 3일치 데이터
             start_time = end_time - timedelta(days=3)
         
-        # 캐시 파일 경로
-        cache_key = f"{start_time.strftime('%Y%m%d_%H')}_{end_time.strftime('%Y%m%d_%H')}"
-        jvm_cache_file = os.path.join(self.cache_dir, f"jvm_{cache_key}.pkl")
-        sys_cache_file = os.path.join(self.cache_dir, f"sys_{cache_key}.pkl")
+        # 고정된 캐시 키 사용
+        jvm_cache_file = os.path.join(self.cache_dir, "jvm_training_latest.pkl")
+        sys_cache_file = os.path.join(self.cache_dir, "sys_training_latest.pkl")
         
         # 캐시된 데이터가 유효한지 확인 (cache_hours 시간 내)
         if self._is_cache_valid(jvm_cache_file, cache_hours) and self._is_cache_valid(sys_cache_file, cache_hours):
-            logger.info(f"캐시된 데이터 사용: {cache_key}")
+            logger.info("캐시된 학습 데이터 사용")
             try:
                 with open(jvm_cache_file, 'rb') as f:
                     jvm_df = pickle.load(f)
@@ -84,14 +82,14 @@ class StreamingDataCollector:
         jvm_df = self._query_jvm_metrics(start_time, end_time)
         sys_df = self._query_system_resources(start_time, end_time)
         
-        # 캐시에 저장
+        # 캐시에 저장 (덮어쓰기)
         if not jvm_df.empty and not sys_df.empty:
             try:
                 with open(jvm_cache_file, 'wb') as f:
                     pickle.dump(jvm_df, f)
                 with open(sys_cache_file, 'wb') as f:
                     pickle.dump(sys_df, f)
-                logger.info(f"데이터 캐시 저장 완료: {cache_key}")
+                logger.info("학습 데이터 캐시 업데이트 완료")
             except Exception as e:
                 logger.warning(f"캐시 저장 실패: {e}")
         
@@ -105,125 +103,102 @@ class StreamingDataCollector:
         file_time = datetime.fromtimestamp(os.path.getmtime(cache_file))
         return (datetime.now() - file_time).total_seconds() < valid_hours * 3600
     
-    def _query_jvm_metrics(self, start_time: datetime, end_time: datetime) -> pd.DataFrame:
-        """InfluxDB에서 JVM 메트릭 조회"""
+    def _query_influxdb_data(self, start_time: datetime, end_time: datetime, query_type: str) -> pd.DataFrame:
+        """InfluxDB에서 데이터 조회 (통합 함수)"""
         device_filter = f' and r["deviceId"] == "{self.device_id}"' if self.device_id else ""
         
-        # ISO 형식으로 시간 변환 (Z 접미사 추가)
         start_str = start_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
         end_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
         
-        query = f'''
+        base_query = f'''
         from(bucket: "{self.influxdb_bucket}")
         |> range(start: {start_str}, stop: {end_str})
         |> filter(fn: (r) => r["origin"] == "server_data")
         |> filter(fn: (r) => r["companyDomain"] == "{self.company_domain}"{device_filter})
-        |> filter(fn: (r) => r["location"] == "service_resource_data")
-        |> filter(fn: (r) => r["_field"] == "value")
         '''
         
-        try:
-            logger.debug(f"JVM 메트릭 쿼리 실행: {start_str} ~ {end_str}")
-            results = self.query_api.query(query)
-            data = []
-            
-            for table in results:
-                for record in table.records:
-                    data.append({
-                        'time': record.get_time(),
-                        'application': record.values.get('gatewayId', ''),
-                        'metric_type': record.get_measurement(),
-                        'value': record.get_value(),
-                        'device_id': record.values.get('deviceId', '')
-                    })
-            
-            df = pd.DataFrame(data)
-            if not df.empty:
-                df['time'] = pd.to_datetime(df['time'])
-                logger.info(f"JVM 메트릭 조회 완료: {len(df)}개")
-            else:
-                logger.warning(f"JVM 메트릭 조회 결과 없음 (시간 범위: {start_str} ~ {end_str})")
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"JVM 메트릭 조회 오류: {e}")
-            return pd.DataFrame()
-    
-    def _query_system_resources(self, start_time: datetime, end_time: datetime) -> pd.DataFrame:
-        """InfluxDB에서 시스템 리소스 조회"""
-        device_filter = f' and r["deviceId"] == "{self.device_id}"' if self.device_id else ""
-        
-        # ISO 형식으로 시간 변환
-        start_str = start_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-        end_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-        
-        # CPU, 메모리, 디스크 리소스 조회
-        queries = {
-            'cpu': f'''
-            from(bucket: "{self.influxdb_bucket}")
-            |> range(start: {start_str}, stop: {end_str})
-            |> filter(fn: (r) => r["origin"] == "server_data")
-            |> filter(fn: (r) => r["companyDomain"] == "{self.company_domain}"{device_filter})
+        if query_type == 'jvm':
+            query = base_query + '''
+            |> filter(fn: (r) => r["location"] == "service_resource_data")
+            |> filter(fn: (r) => r["_field"] == "value")
+            '''
+        elif query_type == 'cpu':
+            query = base_query + '''
             |> filter(fn: (r) => r["location"] == "server_resource_data")
             |> filter(fn: (r) => r["gatewayId"] == "cpu")
             |> filter(fn: (r) => r["_measurement"] == "usage_idle")
             |> filter(fn: (r) => r["_field"] == "value")
-            |> map(fn: (r) => ({{ r with _value: 100.0 - r._value }}))
-            ''',
-            
-            'mem': f'''
-            from(bucket: "{self.influxdb_bucket}")
-            |> range(start: {start_str}, stop: {end_str})
-            |> filter(fn: (r) => r["origin"] == "server_data")
-            |> filter(fn: (r) => r["companyDomain"] == "{self.company_domain}"{device_filter})
+            |> map(fn: (r) => ({ r with _value: 100.0 - r._value }))
+            '''
+        elif query_type == 'mem':
+            query = base_query + '''
             |> filter(fn: (r) => r["location"] == "server_resource_data")
             |> filter(fn: (r) => r["gatewayId"] == "mem")
             |> filter(fn: (r) => r["_measurement"] == "used_percent")
             |> filter(fn: (r) => r["_field"] == "value")
-            ''',
-            
-            'disk': f'''
-            from(bucket: "{self.influxdb_bucket}")
-            |> range(start: {start_str}, stop: {end_str})
-            |> filter(fn: (r) => r["origin"] == "server_data")
-            |> filter(fn: (r) => r["companyDomain"] == "{self.company_domain}"{device_filter})
+            '''
+        elif query_type == 'disk':
+            query = base_query + '''
             |> filter(fn: (r) => r["location"] == "server_resource_data")
             |> filter(fn: (r) => r["gatewayId"] == "disk")
             |> filter(fn: (r) => r["_measurement"] == "used_percent")
             |> filter(fn: (r) => r["_field"] == "value")
             '''
-        }
-        
-        all_data = []
         
         try:
-            for resource_type, query in queries.items():
-                logger.debug(f"{resource_type} 리소스 쿼리 실행")
-                results = self.query_api.query(query)
-                
-                for table in results:
-                    for record in table.records:
-                        measurement = 'usage_user' if resource_type == 'cpu' else 'used_percent'
-                        all_data.append({
+            logger.debug(f"{query_type} 데이터 쿼리 실행: {start_str} ~ {end_str}")
+            results = self.query_api.query(query)
+            data = []
+            
+            for table in results:
+                for record in table.records:
+                    if query_type == 'jvm':
+                        data.append({
                             'time': record.get_time(),
-                            'resource_type': resource_type,
+                            'application': record.values.get('gatewayId', ''),
+                            'metric_type': record.get_measurement(),
+                            'value': record.get_value(),
+                            'device_id': record.values.get('deviceId', '')
+                        })
+                    else:
+                        measurement = 'usage_user' if query_type == 'cpu' else 'used_percent'
+                        data.append({
+                            'time': record.get_time(),
+                            'resource_type': query_type,
                             'measurement': measurement,
                             'value': record.get_value(),
                             'device_id': record.values.get('deviceId', '')
                         })
             
-            df = pd.DataFrame(all_data)
+            df = pd.DataFrame(data)
             if not df.empty:
                 df['time'] = pd.to_datetime(df['time'])
-                logger.info(f"시스템 리소스 조회 완료: {len(df)}개")
+                logger.info(f"{query_type} 데이터 조회 완료: {len(df)}개")
             else:
-                logger.warning(f"시스템 리소스 조회 결과 없음 (시간 범위: {start_str} ~ {end_str})")
+                logger.warning(f"{query_type} 데이터 조회 결과 없음")
             
             return df
             
         except Exception as e:
-            logger.error(f"시스템 리소스 조회 오류: {e}")
+            logger.error(f"{query_type} 데이터 조회 오류: {e}")
+            return pd.DataFrame()
+    
+    def _query_jvm_metrics(self, start_time: datetime, end_time: datetime) -> pd.DataFrame:
+        """InfluxDB에서 JVM 메트릭 조회"""
+        return self._query_influxdb_data(start_time, end_time, 'jvm')
+    
+    def _query_system_resources(self, start_time: datetime, end_time: datetime) -> pd.DataFrame:
+        """InfluxDB에서 시스템 리소스 조회"""
+        all_data = []
+        
+        for resource_type in ['cpu', 'mem', 'disk']:
+            df = self._query_influxdb_data(start_time, end_time, resource_type)
+            if not df.empty:
+                all_data.append(df)
+        
+        if all_data:
+            return pd.concat(all_data, ignore_index=True)
+        else:
             return pd.DataFrame()
     
     def get_latest_data(self, minutes=30) -> Tuple[pd.DataFrame, pd.DataFrame]:

@@ -275,47 +275,6 @@ def create_tables(db_manager):
     
     return success
 
-def add_device_id_columns(db_manager):
-    """기존 테이블에 device_id 열 추가"""
-    logger.info("기존 테이블에 device_id 열 추가 시작")
-    
-    # 각 테이블에 device_id 열을 추가하는 ALTER 쿼리
-    alter_queries = {
-        "jvm_metrics": "ALTER TABLE jvm_metrics ADD COLUMN IF NOT EXISTS device_id VARCHAR(100) DEFAULT '', ADD INDEX IF NOT EXISTS idx_device_id (device_id)",
-        "system_resources": "ALTER TABLE system_resources ADD COLUMN IF NOT EXISTS device_id VARCHAR(100) DEFAULT '', ADD INDEX IF NOT EXISTS idx_device_id (device_id)",
-        "application_impact": "ALTER TABLE application_impact ADD COLUMN IF NOT EXISTS device_id VARCHAR(100) DEFAULT '', ADD INDEX IF NOT EXISTS idx_device_id (device_id)",
-        "feature_data": "ALTER TABLE feature_data ADD COLUMN IF NOT EXISTS device_id VARCHAR(100) DEFAULT '', ADD INDEX IF NOT EXISTS idx_device_id (device_id)",
-        "model_performance": "ALTER TABLE model_performance ADD COLUMN IF NOT EXISTS device_id VARCHAR(100) DEFAULT '', ADD INDEX IF NOT EXISTS idx_device_id (device_id)",
-        "predictions": "ALTER TABLE predictions ADD COLUMN IF NOT EXISTS device_id VARCHAR(100) DEFAULT '', ADD INDEX IF NOT EXISTS idx_device_id (device_id)",
-        "alerts": "ALTER TABLE alerts ADD COLUMN IF NOT EXISTS device_id VARCHAR(100) DEFAULT '', ADD INDEX IF NOT EXISTS idx_device_id (device_id)"
-    }
-    
-    # 각 ALTER 쿼리 실행
-    success = True
-    for table_name, query in alter_queries.items():
-        # 테이블이 존재하는지 확인
-        check_query = f"SHOW TABLES LIKE '{table_name}'"
-        table_exists = db_manager.fetch_one(check_query)
-        
-        if table_exists:
-            # device_id 열이 이미 존재하는지 확인
-            col_query = f"SHOW COLUMNS FROM {table_name} LIKE 'device_id'"
-            col_exists = db_manager.fetch_one(col_query)
-            
-            if not col_exists:
-                result = db_manager.execute_query(query)
-                if result:
-                    logger.info(f"{table_name} 테이블에 device_id 열 추가 완료")
-                else:
-                    logger.error(f"{table_name} 테이블에 device_id 열 추가 실패")
-                    success = False
-            else:
-                logger.info(f"{table_name} 테이블에 이미 device_id 열이 존재함")
-        else:
-            logger.warning(f"{table_name} 테이블이 존재하지 않음")
-    
-    return success
-
 def insert_company(db_manager, company_domain, company_name=None):
     """회사 정보 삽입 또는 확인"""
     logger.info(f"회사 정보 설정: {company_domain}")
